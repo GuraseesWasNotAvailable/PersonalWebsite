@@ -1,44 +1,63 @@
-# vCard - Personal portfolio
+# gurasees.com
 
-![GitHub repo size](https://img.shields.io/github/repo-size/codewithsadee/vcard-personal-portfolio)
-![GitHub stars](https://img.shields.io/github/stars/codewithsadee/vcard-personal-portfolio?style=social)
-![GitHub forks](https://img.shields.io/github/forks/codewithsadee/vcard-personal-portfolio?style=social)
-[![Twitter Follow](https://img.shields.io/twitter/follow/codewithsadee_?style=social)](https://twitter.com/intent/follow?screen_name=codewithsadee_)
-[![YouTube Video Views](https://img.shields.io/youtube/views/SoxmIlgf2zM?style=social)](https://youtu.be/SoxmIlgf2zM)
+A single full-viewport editorial hero — black/cream, no cards, no scroll.
+Gurasees Singh Dhanoa · Aerospace @ IIT Madras.
 
-vCard is a fully responsive personal portfolio website, responsive for all devices, built using HTML, CSS, and JavaScript.
+## Stack
 
-## Demo
+- **Vite + React + TypeScript**
+- **Tailwind CSS** (`cream: #efeee9`, `font-hn` → Helvetica Neue ME)
+- **Lucide React** — mobile close icon only
 
-![vCard Desktop Demo](./website-demo-image/desktop.png "Desktop Demo")
-![vCard Mobile Demo](./website-demo-image/mobile.png "Mobile Demo")
+## The composition (one viewport, `100dvh`, no scroll)
 
-## Prerequisites
+| Layer | z | Content |
+|-------|---|---------|
+| BG image | – | full-bleed background |
+| Marquee | 10 | infinite-scrolling `Gurasees — Dhanoa` (30s linear) |
+| Cream rule + desktop footer | 10 | rule grows from left, dual footer blocks |
+| Front portrait | 20 | cutout over the marquee (letters read behind it) |
+| Header + mobile footer | 30 | brand · year · nav · social |
+| Mobile drawer | 40 | right slide-in on `#141414`, blurred backdrop |
+| Hamburger / close | 50 | morphs bars ↔ X |
 
-Before you begin, ensure you have met the following requirements:
+Nav: **About · Gantry Three · Contact**. Social: **Twitter · LinkedIn · GitHub**.
 
-* [Git](https://git-scm.com/downloads "Download Git") must be installed on your operating system.
+## Gantry Three → live build
 
-## Installing vCard
+The "Gantry Three" nav item points at **`/gantry.html`**, a tiny redirect page
+(`public/gantry.html`) that forwards to the live Gantry app.
 
-To install **vCard**, follow these steps:
+⚠️ **The target is a trycloudflare quick-tunnel URL — it changes every time the
+tunnel restarts.** To update it, edit the **one** `href` in `public/gantry.html`
+(the script reads the destination straight from that link):
 
-Linux and macOS:
-
-```bash
-sudo git clone https://github.com/codewithsadee/vcard-personal-portfolio.git
+```html
+<a class="cta" id="target" href="http://…trycloudflare.com">Continue →</a>
 ```
 
-Windows:
+For a link that doesn't rot, use a named Cloudflare tunnel with a fixed hostname
+(e.g. `gantry.gurasees.com`) and point the href there once.
+
+## To personalize further
+
+- **Portrait + background** are still the template placeholders — swap `PORTRAIT_URL`
+  and `BG_IMAGE` in `src/App.tsx` (or drop files in `public/` and reference them).
+- **Twitter / LinkedIn** are `#` placeholders — set real URLs in the `SOCIAL` array
+  in `src/App.tsx`. GitHub already points to `GuraseesWasNotAvailable`.
+
+## Run
 
 ```bash
-git clone https://github.com/codewithsadee/vcard-personal-portfolio.git
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # tsc -b && vite build  →  dist/  (includes CNAME + gantry.html)
+npm run preview  # serve the production build
 ```
 
-## Contact
+## Deploy (GitHub Pages → gurasees.com)
 
-If you want to contact me you can reach me at [Twitter](https://www.x.com/codewithsadee_).
-
-## License
-
-MIT
+`.github/workflows/deploy.yml` builds the site and publishes `dist/` to Pages.
+`public/CNAME` (`gurasees.com`) is copied into `dist/` so the custom domain sticks.
+The font loads from OnlineWebFonts and the portrait/background are remote URLs, so
+an internet connection is required for the intended look.
