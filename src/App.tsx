@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { X, ChevronDown } from 'lucide-react'
 
 // ------------------------------------------------------------------ //
 // Assets: swap PORTRAIT_URL / BG_IMAGE for your own shots when ready.  //
@@ -43,6 +43,76 @@ const linkProps = (href: string) =>
 const EASE_DRAWER = 'cubic-bezier(0.76, 0, 0.24, 1)'
 const EASE_SOFT = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
+// Live X (Twitter) timeline for @gurasees0 via the official embed widget.
+// X often restricts profile-timeline embeds (the iframe collapses to 0px);
+// if that happens we detect it and show a clean call-to-action instead.
+function XTimeline() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const w = window as unknown as {
+      twttr?: { widgets?: { load: (el?: HTMLElement | null) => void } }
+    }
+    const render = () => w.twttr?.widgets?.load(ref.current)
+
+    if (w.twttr?.widgets) {
+      render()
+    } else {
+      const existing = document.getElementById(
+        'twitter-wjs',
+      ) as HTMLScriptElement | null
+      if (existing) {
+        existing.addEventListener('load', render)
+      } else {
+        const s = document.createElement('script')
+        s.id = 'twitter-wjs'
+        s.src = 'https://platform.twitter.com/widgets.js'
+        s.async = true
+        s.onload = render
+        document.body.appendChild(s)
+      }
+    }
+
+    // If X doesn't render a real timeline within a few seconds, fall back.
+    const t = setTimeout(() => {
+      const f = ref.current?.querySelector('iframe') as HTMLIFrameElement | null
+      if (!f || f.getBoundingClientRect().height < 60) setFailed(true)
+    }, 5000)
+    return () => clearTimeout(t)
+  }, [])
+
+  if (failed) {
+    return (
+      <a
+        href="https://x.com/gurasees0"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block border border-cream/20 px-7 py-9 font-hn text-cream transition-colors duration-300 hover:border-cream/50"
+      >
+        <span className="block text-xl">Read the latest from @gurasees0</span>
+        <span className="mt-1 block text-sm text-cream/50">
+          Rockets, builds, and the next thing. Opens X in a new tab.
+        </span>
+      </a>
+    )
+  }
+
+  return (
+    <div ref={ref} className="min-h-[100px]">
+      <a
+        className="twitter-timeline"
+        data-theme="dark"
+        data-chrome="noheader nofooter transparent"
+        data-height="640"
+        href="https://twitter.com/gurasees0?ref_src=twsrc%5Etfw"
+      >
+        Posts by @gurasees0
+      </a>
+    </div>
+  )
+}
+
 export default function App() {
   const [open, setOpen] = useState(false)
 
@@ -55,6 +125,7 @@ export default function App() {
   }, [open])
 
   return (
+    <>
     <section className="relative h-[100dvh] w-full overflow-hidden bg-black">
       {/* ---------------------------------------------------------------- */}
       {/* BG image (full-bleed, behind everything)                          */}
@@ -108,7 +179,7 @@ export default function App() {
       {/* Front portrait (z-20, above the marquee, non-interactive)         */}
       {/* ---------------------------------------------------------------- */}
       <div
-        className="anim-rise-in pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto h-[58vh] w-[74vw] sm:h-[72vh] sm:w-[47vw]"
+        className="anim-rise-in pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto h-[70vh] w-[89vw] sm:h-[86vh] sm:w-[56vw]"
         style={{ animationDelay: '300ms' }}
       >
         <img
@@ -318,6 +389,54 @@ export default function App() {
           ))}
         </div>
       </aside>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Scroll cue -> posts (z-30)                                        */}
+      {/* ---------------------------------------------------------------- */}
+      <div
+        className="anim-fade-up absolute inset-x-0 bottom-3 z-30 flex justify-center"
+        style={{ animationDelay: '1700ms' }}
+      >
+        <button
+          type="button"
+          aria-label="Scroll to posts"
+          onClick={() =>
+            document
+              .getElementById('posts')
+              ?.scrollIntoView({ behavior: 'smooth' })
+          }
+          className="text-cream/70 transition-opacity duration-300 hover:opacity-100"
+        >
+          <ChevronDown className="animate-bounce" size={22} strokeWidth={1.5} />
+        </button>
+      </div>
     </section>
+
+    {/* ================================================================== */}
+    {/* Posts — live X timeline for @gurasees0                             */}
+    {/* ================================================================== */}
+    <section
+      id="posts"
+      className="min-h-[100dvh] w-full bg-black px-6 py-20 sm:px-10 sm:py-28"
+    >
+      <div className="mx-auto max-w-2xl">
+        <p className="text-xs uppercase tracking-[0.2em] text-cream/50">Latest</p>
+        <h2 className="mt-3 font-hn text-6xl leading-none text-cream sm:text-8xl">
+          Posts
+        </h2>
+        <a
+          href="https://x.com/gurasees0"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-4 inline-block font-hn text-sm text-cream/70 transition-opacity duration-300 hover:opacity-100"
+        >
+          @gurasees0 on X
+        </a>
+        <div className="mt-10">
+          <XTimeline />
+        </div>
+      </div>
+    </section>
+    </>
   )
 }
