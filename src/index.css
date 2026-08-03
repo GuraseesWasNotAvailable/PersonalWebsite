@@ -92,7 +92,7 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
-/* Reduced motion — collapse entrances, stop the marquee              */
+/* Reduced motion: collapse entrances, stop the marquee              */
 /* ------------------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
   .anim-fade-in,

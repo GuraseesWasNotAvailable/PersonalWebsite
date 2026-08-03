@@ -2,16 +2,16 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 
 // ------------------------------------------------------------------ //
-// Assets — swap PORTRAIT_URL / BG_IMAGE for your own shots when ready. //
-// The portrait + background below are placeholders from the template.  //
+// Assets: swap PORTRAIT_URL / BG_IMAGE for your own shots when ready.  //
+// portrait.png is Gurasees (bg removed); background.jpg is the desert. //
 // ------------------------------------------------------------------ //
 const BG_IMAGE = '/background.jpg'
 
 const PORTRAIT_URL = '/portrait.png'
 
 // ------------------------------------------------------------------ //
-// Nav + social. Gantry Three points at the /gantry/ redirect page,     //
-// which forwards to the live build (see public/gantry/index.html).     //
+// Nav + social. Gantry points at the /gantry.html redirect page,       //
+// which forwards to the live build (see public/gantry.html).           //
 // ------------------------------------------------------------------ //
 const CONTACT_EMAIL = 'ae23b064@smail.iitm.ac.in'
 const GITHUB_URL = 'https://github.com/GuraseesWasNotAvailable'
@@ -20,7 +20,7 @@ type Link = { label: string; href: string }
 
 const NAV: Link[] = [
   { label: 'About', href: '#' },
-  { label: 'Gantry Three', href: '/gantry.html' },
+  { label: 'Gantry', href: '/gantry.html' },
   { label: 'Contact', href: `mailto:${CONTACT_EMAIL}` },
 ]
 
@@ -72,9 +72,9 @@ export default function App() {
         className="anim-fade-up absolute inset-x-0 top-[16vh] z-10 overflow-hidden sm:top-[14vh]"
         style={{ animationDelay: '500ms' }}
       >
-        <div className="marquee flex w-max whitespace-nowrap font-hn text-[16vh] leading-none text-cream sm:text-[26vh]">
-          <span className="pr-[6vw]">Gurasees &mdash; Dhanoa&nbsp;</span>
-          <span className="pr-[6vw]">Gurasees &mdash; Dhanoa&nbsp;</span>
+        <div className="marquee flex w-max whitespace-nowrap font-hn text-[12vh] leading-none text-cream sm:text-[18vh]">
+          <span className="pr-[6vw]">Gurasees Dhanoa&nbsp;</span>
+          <span className="pr-[6vw]">Gurasees Dhanoa&nbsp;</span>
         </div>
       </div>
 
@@ -107,12 +107,16 @@ export default function App() {
       {/* ---------------------------------------------------------------- */}
       {/* Front portrait (z-20, above the marquee, non-interactive)         */}
       {/* ---------------------------------------------------------------- */}
-      <img
-        src={PORTRAIT_URL}
-        alt="Portrait"
-        className="anim-rise-in pointer-events-none absolute inset-0 z-20 h-full w-full object-cover object-top"
+      <div
+        className="anim-rise-in pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto h-[58vh] w-[74vw] sm:h-[72vh] sm:w-[47vw]"
         style={{ animationDelay: '300ms' }}
-      />
+      >
+        <img
+          src={PORTRAIT_URL}
+          alt="Portrait"
+          className="h-full w-full object-cover object-top"
+        />
+      </div>
 
       {/* ---------------------------------------------------------------- */}
       {/* Header (z-30)                                                     */}
