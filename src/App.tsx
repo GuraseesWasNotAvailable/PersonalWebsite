@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X, ChevronDown } from 'lucide-react'
 
 // ------------------------------------------------------------------ //
@@ -45,6 +45,9 @@ const EASE_SOFT = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
 export default function App() {
   const [open, setOpen] = useState(false)
+  const bgRef = useRef<HTMLImageElement>(null)
+  const portraitRef = useRef<HTMLDivElement>(null)
+  const postsRef = useRef<HTMLElement>(null)
 
   // Lock body scroll while the mobile drawer is open.
   useEffect(() => {
@@ -54,6 +57,63 @@ export default function App() {
     }
   }, [open])
 
+  // Mouse parallax: background and portrait drift at different depths.
+  useEffect(() => {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const fine = window.matchMedia('(pointer: fine)').matches
+    if (reduce || !fine) return
+
+    let tx = 0
+    let ty = 0
+    let cx = 0
+    let cy = 0
+    let raf = 0
+    const onMove = (e: MouseEvent) => {
+      tx = (e.clientX / window.innerWidth - 0.5) * 2
+      ty = (e.clientY / window.innerHeight - 0.5) * 2
+    }
+    const tick = () => {
+      cx += (tx - cx) * 0.06
+      cy += (ty - cy) * 0.06
+      if (bgRef.current) {
+        bgRef.current.style.transform = `translate3d(${cx * -10}px, ${cy * -10}px, 0) scale(1.07)`
+      }
+      if (portraitRef.current) {
+        portraitRef.current.style.transform = `translate3d(${cx * 24}px, ${cy * 16}px, 0)`
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    window.addEventListener('mousemove', onMove)
+    raf = requestAnimationFrame(tick)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      cancelAnimationFrame(raf)
+    }
+  }, [])
+
+  // Reveal the Posts section as it scrolls into view.
+  useEffect(() => {
+    const el = postsRef.current
+    if (!el) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      el.classList.add('in-view')
+      return
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            el.classList.add('in-view')
+            io.disconnect()
+          }
+        })
+      },
+      { threshold: 0.15 },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
+
   return (
     <>
     <section className="relative h-[100dvh] w-full overflow-hidden bg-black">
@@ -61,9 +121,10 @@ export default function App() {
       {/* BG image (full-bleed, behind everything)                          */}
       {/* ---------------------------------------------------------------- */}
       <img
+        ref={bgRef}
         src={BG_IMAGE}
         alt=""
-        className="anim-fade-in absolute inset-0 h-full w-full object-cover"
+        className="anim-fade-in absolute inset-0 h-full w-full object-cover will-change-transform"
       />
 
       {/* ---------------------------------------------------------------- */}
@@ -109,14 +170,19 @@ export default function App() {
       {/* Front portrait (z-20, above the marquee, non-interactive)         */}
       {/* ---------------------------------------------------------------- */}
       <div
-        className="anim-rise-in pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto h-[70vh] w-[89vw] sm:h-[86vh] sm:w-[56vw]"
-        style={{ animationDelay: '300ms' }}
+        ref={portraitRef}
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 mx-auto h-[70vh] w-[89vw] will-change-transform sm:h-[86vh] sm:w-[56vw]"
       >
-        <img
-          src={PORTRAIT_URL}
-          alt="Portrait"
-          className="h-full w-full object-cover object-top"
-        />
+        <div
+          className="anim-rise-in h-full w-full"
+          style={{ animationDelay: '300ms' }}
+        >
+          <img
+            src={PORTRAIT_URL}
+            alt="Portrait"
+            className="portrait-breathe h-full w-full object-cover object-top"
+          />
+        </div>
       </div>
 
       {/* ---------------------------------------------------------------- */}
@@ -149,7 +215,7 @@ export default function App() {
                 <a
                   href={item.href}
                   {...linkProps(item.href)}
-                  className="transition-opacity duration-300 hover:opacity-60"
+                  className="link-underline"
                 >
                   {item.label}
                 </a>
@@ -167,7 +233,7 @@ export default function App() {
                 <a
                   href={item.href}
                   {...linkProps(item.href)}
-                  className="transition-opacity duration-300 hover:opacity-60"
+                  className="link-underline"
                 >
                   {item.label}
                 </a>
@@ -347,33 +413,46 @@ export default function App() {
     {/* ================================================================== */}
     <section
       id="posts"
+      ref={postsRef}
       className="min-h-[100dvh] w-full bg-black px-6 py-20 sm:px-10 sm:py-28"
     >
       <div className="mx-auto max-w-2xl">
-        <p className="text-xs uppercase tracking-[0.2em] text-cream/50">Latest</p>
-        <h2 className="mt-3 font-hn text-6xl leading-none text-cream sm:text-8xl">
+        <p className="reveal text-xs uppercase tracking-[0.2em] text-cream/50">
+          Latest
+        </p>
+        <h2
+          className="reveal mt-3 font-hn text-6xl leading-none text-cream sm:text-8xl"
+          style={{ transitionDelay: '80ms' }}
+        >
           Posts
         </h2>
         <a
           href="https://x.com/gurasees0"
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-4 inline-block font-hn text-sm text-cream/70 transition-opacity duration-300 hover:opacity-100"
+          className="reveal mt-4 inline-block font-hn text-sm text-cream/70"
+          style={{ transitionDelay: '160ms' }}
         >
           @gurasees0 on X
         </a>
-        <div className="mt-10">
+        <div className="reveal mt-10" style={{ transitionDelay: '240ms' }}>
           <a
             href="https://x.com/gurasees0"
             target="_blank"
             rel="noopener noreferrer"
-            className="block border border-cream/20 px-7 py-9 font-hn text-cream transition-colors duration-300 hover:border-cream/50"
+            className="group block border border-cream/20 px-7 py-9 font-hn text-cream transition-all duration-300 hover:-translate-y-0.5 hover:border-cream/50"
           >
             <span className="block text-xl">
               Read the latest from @gurasees0
             </span>
             <span className="mt-1 block text-sm text-cream/50">
               Rockets, builds, and the next thing. Opens X in a new tab.
+            </span>
+            <span className="mt-4 inline-flex items-center gap-2 text-sm text-cream/70">
+              Open X
+              <span className="transition-transform duration-300 group-hover:translate-x-1">
+                →
+              </span>
             </span>
           </a>
         </div>
