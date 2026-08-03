@@ -5,11 +5,9 @@ import { X } from 'lucide-react'
 // Assets — swap PORTRAIT_URL / BG_IMAGE for your own shots when ready. //
 // The portrait + background below are placeholders from the template.  //
 // ------------------------------------------------------------------ //
-const BG_IMAGE =
-  'https://images.higgs.ai/?default=1&output=webp&url=https%3A%2F%2Fd8j0ntlcm91z4.cloudfront.net%2Fuser_38xzZboKViGWJOttwIXH07lWA1P%2Fhf_20260729_022513_486985a2-ac8c-4278-91a8-071dcd9fcaff.png&w=1280&q=85'
+const BG_IMAGE = '/background.jpg'
 
-const PORTRAIT_URL =
-  'https://stone-expand-60400629.figma.site/_assets/v11/8da570354e86aa0d44ac3e4aa335a72c8e750d68.png'
+const PORTRAIT_URL = '/portrait.png'
 
 // ------------------------------------------------------------------ //
 // Nav + social. Gantry Three points at the /gantry/ redirect page,     //
@@ -27,10 +25,19 @@ const NAV: Link[] = [
 ]
 
 const SOCIAL: Link[] = [
-  { label: 'Twitter', href: '#' },
-  { label: 'LinkedIn', href: '#' },
+  { label: 'Twitter', href: 'https://x.com/gurasees0' },
+  {
+    label: 'LinkedIn',
+    href: 'https://www.linkedin.com/in/gurasees-singh-dhanoa-9aa7a221b/',
+  },
   { label: 'GitHub', href: GITHUB_URL },
 ]
+
+// External links (http…) open in a new tab; internal ones (#, mailto, /gantry.html) stay put.
+const linkProps = (href: string) =>
+  href.startsWith('http')
+    ? { target: '_blank', rel: 'noopener noreferrer' }
+    : {}
 
 // Shared easings
 const EASE_DRAWER = 'cubic-bezier(0.76, 0, 0.24, 1)'
@@ -103,7 +110,7 @@ export default function App() {
       <img
         src={PORTRAIT_URL}
         alt="Portrait"
-        className="anim-rise-in pointer-events-none absolute inset-0 z-20 h-full w-full object-cover"
+        className="anim-rise-in pointer-events-none absolute inset-0 z-20 h-full w-full object-cover object-top"
         style={{ animationDelay: '300ms' }}
       />
 
@@ -136,6 +143,7 @@ export default function App() {
               >
                 <a
                   href={item.href}
+                  {...linkProps(item.href)}
                   className="transition-opacity duration-300 hover:opacity-60"
                 >
                   {item.label}
@@ -153,6 +161,7 @@ export default function App() {
               >
                 <a
                   href={item.href}
+                  {...linkProps(item.href)}
                   className="transition-opacity duration-300 hover:opacity-60"
                 >
                   {item.label}
@@ -260,6 +269,7 @@ export default function App() {
             <a
               key={item.label}
               href={item.href}
+              {...linkProps(item.href)}
               className="font-hn text-4xl text-cream"
               style={{
                 transform: open ? 'translateY(0)' : 'translateY(24px)',
@@ -290,6 +300,7 @@ export default function App() {
             <a
               key={item.label}
               href={item.href}
+              {...linkProps(item.href)}
               className="font-hn text-sm text-cream"
               style={{
                 transform: open ? 'translateY(0)' : 'translateY(16px)',
