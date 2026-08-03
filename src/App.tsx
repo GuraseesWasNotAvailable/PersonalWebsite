@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { X, ChevronDown } from 'lucide-react'
 
 // ------------------------------------------------------------------ //
@@ -42,76 +42,6 @@ const linkProps = (href: string) =>
 // Shared easings
 const EASE_DRAWER = 'cubic-bezier(0.76, 0, 0.24, 1)'
 const EASE_SOFT = 'cubic-bezier(0.22, 1, 0.36, 1)'
-
-// Live X (Twitter) timeline for @gurasees0 via the official embed widget.
-// X often restricts profile-timeline embeds (the iframe collapses to 0px);
-// if that happens we detect it and show a clean call-to-action instead.
-function XTimeline() {
-  const ref = useRef<HTMLDivElement>(null)
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    const w = window as unknown as {
-      twttr?: { widgets?: { load: (el?: HTMLElement | null) => void } }
-    }
-    const render = () => w.twttr?.widgets?.load(ref.current)
-
-    if (w.twttr?.widgets) {
-      render()
-    } else {
-      const existing = document.getElementById(
-        'twitter-wjs',
-      ) as HTMLScriptElement | null
-      if (existing) {
-        existing.addEventListener('load', render)
-      } else {
-        const s = document.createElement('script')
-        s.id = 'twitter-wjs'
-        s.src = 'https://platform.twitter.com/widgets.js'
-        s.async = true
-        s.onload = render
-        document.body.appendChild(s)
-      }
-    }
-
-    // If X doesn't render a real timeline within a few seconds, fall back.
-    const t = setTimeout(() => {
-      const f = ref.current?.querySelector('iframe') as HTMLIFrameElement | null
-      if (!f || f.getBoundingClientRect().height < 60) setFailed(true)
-    }, 5000)
-    return () => clearTimeout(t)
-  }, [])
-
-  if (failed) {
-    return (
-      <a
-        href="https://x.com/gurasees0"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block border border-cream/20 px-7 py-9 font-hn text-cream transition-colors duration-300 hover:border-cream/50"
-      >
-        <span className="block text-xl">Read the latest from @gurasees0</span>
-        <span className="mt-1 block text-sm text-cream/50">
-          Rockets, builds, and the next thing. Opens X in a new tab.
-        </span>
-      </a>
-    )
-  }
-
-  return (
-    <div ref={ref} className="min-h-[100px]">
-      <a
-        className="twitter-timeline"
-        data-theme="dark"
-        data-chrome="noheader nofooter transparent"
-        data-height="640"
-        href="https://twitter.com/gurasees0?ref_src=twsrc%5Etfw"
-      >
-        Posts by @gurasees0
-      </a>
-    </div>
-  )
-}
 
 export default function App() {
   const [open, setOpen] = useState(false)
@@ -433,7 +363,19 @@ export default function App() {
           @gurasees0 on X
         </a>
         <div className="mt-10">
-          <XTimeline />
+          <a
+            href="https://x.com/gurasees0"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block border border-cream/20 px-7 py-9 font-hn text-cream transition-colors duration-300 hover:border-cream/50"
+          >
+            <span className="block text-xl">
+              Read the latest from @gurasees0
+            </span>
+            <span className="mt-1 block text-sm text-cream/50">
+              Rockets, builds, and the next thing. Opens X in a new tab.
+            </span>
+          </a>
         </div>
       </div>
     </section>
