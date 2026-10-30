@@ -428,7 +428,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   tailGeo.setAttribute('color', new THREE.BufferAttribute(tailCol, 3))
   const tail = new THREE.Points(tailGeo, new THREE.PointsMaterial({ size: 2.4, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }))
   tail.frustumCulled = false
-  scene.add(tail)
+  if (cometIndex >= 0) scene.add(tail)
   const tailJitter = new Float32Array(TAIL * 2)
   for (let k = 0; k < TAIL * 2; k++) tailJitter[k] = rand() - 0.5
 

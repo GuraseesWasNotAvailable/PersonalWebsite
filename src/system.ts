@@ -392,23 +392,6 @@ const SMALL: SmallSpec[] = [
     look: { c0: '#d8d4cc', c1: '#b2ada4', c2: '#f0eee9', c3: '#8c8780', bands: 0, turb: 0, crater: 0.1, capSize: 0, seed: 15 },
     facts: 'The most massive dwarf planet, on a 558 year orbit tipped 44 degrees, now near its farthest from the Sun at 96 AU.',
   },
-  {
-    name: 'Halley',
-    kind: 'comet',
-    a: 17.834,
-    e: 0.96714,
-    i: 162.26,
-    O: 58.42,
-    w: 111.33,
-    M: 0,
-    epoch: 2446470.5, // perihelion, 1986 February 9
-    periodDays: 27510,
-    radiusEarth: 0.0012,
-    pole: [0, 90],
-    rotHours: 52.8,
-    look: 'comet',
-    facts: 'Halley. 75 years round, backwards against the planets, last in by the Sun in 1986, due again in 2061. The tail always points away from the Sun.',
-  },
 ]
 
 type MoonSpec = {
