@@ -197,10 +197,10 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.5, 60000)
   camera.position.set(250, 95, 330)
 
-  // A multisampled target for the post pass, so sails and lights smaller
-  // than a pixel do not pop in and out from frame to frame.
-  const target = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 })
-  const composer = new EffectComposer(renderer, target)
+  // The composer's own target: sized to the drawing buffer, pixel ratio
+  // included. A custom multisampled target drew into a quarter of the canvas
+  // on Intel graphics at a 1.5 display scale, so none of that here.
+  const composer = new EffectComposer(renderer)
   composer.addPass(new RenderPass(scene, camera))
   composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.5, 0.72))
   composer.addPass(new OutputPass())
