@@ -10,3 +10,7 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+
+# bundled test harness output
+tools/*.mjs.map
+tools/ground_test.mjs
