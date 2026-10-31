@@ -2,9 +2,10 @@
 //   npx vite preview --host 127.0.0.1 --port 4174 --strictPort
 //   node tools/cdp_test.mjs http://127.0.0.1:4174/ <output dir>
 
-// Drive the page in headless Chrome over the DevTools protocol: click the
-// planet, then a sail, then press Escape, and screenshot each state. Uses
-// Node's built-in WebSocket; no packages.
+// Drive the page in headless Chrome over the DevTools protocol: click Earth,
+// close in, click a sail from there (from the star view a sail is under the
+// three pixel floor and is not a target), press Escape back out, and
+// screenshot each state. Uses Node's built-in WebSocket; no packages.
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 
@@ -88,6 +89,7 @@ for (let i = 0; i < 60; i++) {
   if (ready) break
 }
 await sleep(3000)
+console.log('device as the page sees it:', await evaluate('JSON.stringify({ coarse: matchMedia("(pointer: coarse)").matches, screen: [screen.width, screen.height], cores: navigator.hardwareConcurrency, memory: navigator.deviceMemory })'))
 const fps = await evaluate(`new Promise(r => { let n = 0; const t0 = performance.now(); const f = () => { n++; if (performance.now() - t0 > 2000) r((n / (performance.now() - t0) * 1000).toFixed(1)); else requestAnimationFrame(f) }; requestAnimationFrame(f) })`)
 console.log(`frames per second under swiftshader: ${fps}`)
 console.log('focus at start:', await evaluate('window.__dyson.focus()'))
@@ -101,19 +103,8 @@ await sleep(4000)
 console.log('focus after clicking the planet:', await evaluate('window.__dyson.focus()'))
 await shot('click_planet')
 
-// Click the planet again to come in closer, twice.
-for (let k = 0; k < 2; k++) {
-  const p2 = JSON.parse(await evaluate('JSON.stringify(window.__dyson.screen("planet"))'))
-  await click(p2.x + 40, p2.y - 30)
-  await sleep(3000)
-}
-console.log('focus after closing in:', await evaluate('window.__dyson.focus()'))
-await shot('click_closer')
-
-await key('Escape', 'Escape')
-await sleep(4000)
-console.log('focus after escape:', await evaluate('window.__dyson.focus()'))
-
+// From the landed view a transit sail leaving Earth is tens of pixels
+// across and in front of the planet, so it is a target.
 const sail = await evaluate('JSON.stringify(window.__dyson.screen("sail"))')
 console.log('a sail on screen at', sail)
 if (sail !== 'null') {
@@ -125,7 +116,22 @@ if (sail !== 'null') {
   await sleep(6000)
   console.log('six seconds later:', await evaluate('window.__dyson.text()'))
   await shot('follow_sail')
+  await key('Escape', 'Escape')
+  await sleep(4000)
+  console.log('focus after escape from the sail:', await evaluate('window.__dyson.focus()'))
 }
+
+// Back on Earth: click the planet again to come in closer.
+if ((await evaluate('window.__dyson.focus()')) !== 'ground') {
+  const pb = JSON.parse(await evaluate('JSON.stringify(window.__dyson.screen("planet"))'))
+  await click(pb.x, pb.y)
+  await sleep(4000)
+}
+const p2 = JSON.parse(await evaluate('JSON.stringify(window.__dyson.screen("planet"))'))
+await click(p2.x + 40, p2.y - 30)
+await sleep(3000)
+console.log('focus after closing in:', await evaluate('window.__dyson.focus()'))
+await shot('click_closer')
 
 await key('Escape', 'Escape')
 await sleep(3500)

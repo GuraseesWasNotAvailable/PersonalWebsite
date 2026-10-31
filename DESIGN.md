@@ -237,3 +237,43 @@ export function buildSphereView(sphere: DysonSphere): { group: THREE.Group; upda
 - Camera. The star view sits 900 units out so the finished sphere, radius
   330, fills about half the height. `?t=<hours>` opens the build at that
   point of the cycle, for looking and for tests.
+
+## Phones (2026-11-01)
+
+- Two quality tiers, picked once at load in `pickQuality` (App.tsx): a coarse
+  pointer, a short side under 700 px, four or fewer cores or 4 GB or less of
+  memory selects the light tier; `?mobile=1` or `?mobile=0` forces either.
+  The light tier halves the fleet, keeps 40 percent of the stars and belt
+  rocks, caps the pixel ratio at 1.5, runs bloom at half resolution, uses
+  three noise octaves instead of five through the `FBM_OCTAVES` define,
+  coarser spheres, a 512 wide height map and a 25 s warm up.
+- The star view distance scales with the aspect ratio so the finished
+  sphere fits the narrow side of the screen; portrait pulls back to about
+  2,100 units.
+- Touch: panning is off because the camera always rides its subject; one
+  finger orbits, two fingers zoom, a short tap without movement is a click.
+  Tags grow their hit area under a coarse pointer and hide when their label
+  would leave the screen.
+- Layout under 640 px: the foot stacks left aligned over a soft scrim, the
+  readout drops to three lines, a short hint replaces the long one, and the
+  overlay pads for safe areas. All overlay text carries a shadow so it reads
+  over a glowing lattice.
+- `tools/phone_shot.mjs` renders a real 390 px viewport through DevTools
+  device emulation; headless window sizes cannot go that narrow.
+- Review fixes (three adversarial reviewers, 22 findings, 19 applied): the
+  bloom chain is sized by hand after the composer resizes it, so the light
+  tier really runs bloom at half resolution; the sail mesh is never frustum
+  culled (three's one off bounding sphere went stale as Earth moved); sail
+  matrices are written straight into the instance buffer, the single largest
+  per frame cost on a phone; the ground renderer hides its moving parts and
+  refreshes them every fifteenth frame beyond 420 units; the belts warm start
+  Kepler from last frame's anomaly; a tap goes to the Sun before anything
+  else, sails under three pixels and ground things beyond 400 units are not
+  targets, a second finger cancels a tap, and a `back` button appears
+  whenever the camera follows anything since a phone has no Escape; the
+  light tier skips every other frame on a 120 Hz display; the star view is
+  refitted when a phone turns; tags keep clear of the name and the readout;
+  the thumb hint follows the pointer type, not the width; text floors at
+  12 px and links get 44 px tap targets. Not applied: a per device memory
+  budget and a context loss handler, judged out of proportion for a page
+  that can be reloaded.

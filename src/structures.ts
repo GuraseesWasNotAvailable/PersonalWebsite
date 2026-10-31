@@ -285,11 +285,19 @@ export function buildGround(ground: Surface, R: number, glow: THREE.Texture): Gr
   const hotPkg = new THREE.Color()
   const here = new THREE.Vector3()
 
+  const dynamic = [barrel, coils, flash, packages, bots, lamps, crates, padRocket, siloFlash]
+  let skipped = 0
   function update(camera: THREE.Camera) {
     // How bright the lights may be: full within 90 units of Earth's centre,
     // down to a non-blooming level beyond 420.
     group.getWorldPosition(here)
     const d = camera.position.distanceTo(here)
+    // From far away nothing that moves on the ground is a pixel wide, so the
+    // moving parts are hidden and their buffers refreshed only now and then,
+    // ready for the moment the camera comes back in.
+    const far = d > 420
+    for (const m of dynamic) m.visible = !far
+    if (far && ++skipped % 15 !== 0) return
     const u = Math.max(0, Math.min(1, (420 - d) / 330))
     const gain = u * u * (3 - 2 * u)
     const dimTo = (base: THREE.Color, out: THREE.Color) => {

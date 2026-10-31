@@ -4,7 +4,7 @@
 // the belts as Keplerian point clouds. Nothing is fetched or painted on the
 // CPU except a one-row ring strip.
 import * as THREE from 'three'
-import { NOISE_GLSL } from './planet'
+import { NOISE_GLSL, SHADER_DEFINES } from './planet'
 import { GM, distOf, solveKepler, type Body, type Look, type Rings } from './system'
 
 export const SUN_LIGHT = '#fff3e0'
@@ -80,6 +80,7 @@ void main(){
 export function worldMaterial(look: Look) {
   const c = (hex: string) => new THREE.Color(hex)
   return new THREE.ShaderMaterial({
+    defines: { ...SHADER_DEFINES },
     uniforms: {
       ...lightUniforms(),
       uSunDir: { value: new THREE.Vector3(1, 0, 0) },
@@ -234,6 +235,7 @@ export class Belt {
   private readonly sw: Float64Array
   private readonly M0: Float64Array
   private readonly nn: Float64Array
+  private readonly E: Float64Array // last eccentric anomaly, the warm start
 
   constructor(n: number, gen: (k: number) => { a: number; e: number; i: number; O: number; w: number; M0: number; n: number }) {
     this.n = n
@@ -248,6 +250,7 @@ export class Belt {
     this.sw = new Float64Array(n)
     this.M0 = new Float64Array(n)
     this.nn = new Float64Array(n)
+    this.E = new Float64Array(n)
     for (let k = 0; k < n; k++) {
       const g = gen(k)
       this.a[k] = g.a
@@ -260,13 +263,21 @@ export class Belt {
       this.sw[k] = Math.sin(g.w)
       this.M0[k] = g.M0
       this.nn[k] = g.n
+      this.E[k] = solveKepler(g.M0, g.e) + (g.M0 - Math.atan2(Math.sin(g.M0), Math.cos(g.M0)))
     }
   }
 
   update(t: number) {
     const { a, e, ci, si, cO, sO, cw, sw, M0, nn, pos } = this
     for (let k = 0; k < this.n; k++) {
-      const E = solveKepler(M0[k] + nn[k] * t, e[k])
+      // Two Newton steps from last frame's answer: the mean anomaly moves a
+      // tiny fraction of a radian per frame, so this is as exact as a full
+      // solve at a fraction of the cost. E tracks the unwrapped M.
+      const M = M0[k] + nn[k] * t
+      let E = this.E[k]
+      E -= (E - e[k] * Math.sin(E) - M) / (1 - e[k] * Math.cos(E))
+      E -= (E - e[k] * Math.sin(E) - M) / (1 - e[k] * Math.cos(E))
+      this.E[k] = E
       const xo = a[k] * (Math.cos(E) - e[k])
       const yo = a[k] * Math.sqrt(1 - e[k] * e[k]) * Math.sin(E)
       const xe = (cO[k] * cw[k] - sO[k] * sw[k] * ci[k]) * xo + (-cO[k] * sw[k] - sO[k] * cw[k] * ci[k]) * yo

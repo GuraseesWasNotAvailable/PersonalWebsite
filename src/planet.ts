@@ -6,9 +6,13 @@
 import * as THREE from 'three'
 import { fbm, hash3, heightAt, smooth } from './noise'
 
-export function makePlanet(seed = 3) {
-  const W = 1024
-  const H = 512
+// Shader defines every material here and in worlds.ts and App.tsx picks up
+// at creation. The page lowers the octave count on phones before it builds
+// anything; the fbm loops read it.
+export const SHADER_DEFINES: { FBM_OCTAVES: number } = { FBM_OCTAVES: 5 }
+
+export function makePlanet(seed = 3, W = 1024) {
+  const H = W / 2
   const data = new Uint8Array(W * H * 4)
   for (let y = 0; y < H; y++) {
     const lat = (0.5 - y / H) * Math.PI
@@ -44,8 +48,8 @@ export function makePlanet(seed = 3) {
   height.needsUpdate = true
 
   // Clouds, coarser and transparent where there is no cloud.
-  const CW = 512
-  const CH = 256
+  const CW = W / 2
+  const CH = W / 4
   const cl = document.createElement('canvas')
   cl.width = CW
   cl.height = CH
@@ -73,6 +77,9 @@ export function makePlanet(seed = 3) {
 
 // Ashima simplex noise, shared by the star and the planet shaders.
 export const NOISE_GLSL = /* glsl */ `
+#ifndef FBM_OCTAVES
+#define FBM_OCTAVES 5
+#endif
 vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
@@ -98,7 +105,7 @@ float snoise(vec3 v){
 }
 float fbm(vec3 p){
   float f=0.0, a=0.5;
-  for(int i=0;i<5;i++){ f+=a*snoise(p); p=p*2.03+vec3(1.7); a*=0.5; }
+  for(int i=0;i<FBM_OCTAVES;i++){ f+=a*snoise(p); p=p*2.03+vec3(1.7); a*=0.5; }
   return f;
 }`
 

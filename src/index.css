@@ -44,7 +44,46 @@ canvas.sky {
   display: grid;
   grid-template-rows: auto 1fr auto;
   padding: clamp(18px, 3vw, 34px);
+  padding-top: max(clamp(18px, 3vw, 34px), env(safe-area-inset-top));
+  padding-right: max(clamp(18px, 3vw, 34px), env(safe-area-inset-right));
+  padding-bottom: max(clamp(18px, 3vw, 34px), env(safe-area-inset-bottom));
+  padding-left: max(clamp(18px, 3vw, 34px), env(safe-area-inset-left));
   box-sizing: border-box;
+}
+
+/* Two hints: the long one for a mouse, the short one for a thumb. */
+.hint.narrow {
+  display: none;
+}
+
+/* The way back when there is no Escape key: shown whenever the camera is
+   following something, big enough for a thumb. */
+.back {
+  position: fixed;
+  top: max(18px, env(safe-area-inset-top));
+  right: max(18px, env(safe-area-inset-right));
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--frame);
+  border-radius: 2px;
+  background: rgba(2, 4, 15, 0.55);
+  color: var(--frame);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.back:hover,
+.back:focus-visible {
+  background: rgba(2, 4, 15, 0.85);
+  outline: none;
+}
+
+.hint.loading {
+  color: var(--frame);
 }
 
 .overlay a {
@@ -56,6 +95,17 @@ canvas.sky {
   font-size: clamp(15px, 1.4vw, 19px);
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+
+/* Text sits over a glowing lattice at times; a soft shadow keeps it legible. */
+.name,
+.links a,
+.hint,
+.hud,
+.tag {
+  text-shadow:
+    0 0 2px rgba(2, 4, 15, 0.95),
+    0 1px 10px rgba(2, 4, 15, 0.85);
 }
 
 .name small {
@@ -254,9 +304,75 @@ canvas.sky:active {
   padding: 24px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px), (max-height: 520px) {
   .hud .bar {
     width: 120px;
+  }
+
+  /* Stack the foot: links, hint, then a compact readout, all left aligned,
+     over a soft scrim so it reads against a finished sphere. */
+  .foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    position: relative;
+  }
+
+  .foot::before {
+    content: '';
+    position: absolute;
+    inset: -40px -100vw -100vh -100vw;
+    background: linear-gradient(to bottom, rgba(2, 4, 15, 0) 0, rgba(2, 4, 15, 0.75) 60px, rgba(2, 4, 15, 0.85) 100%);
+    z-index: -1;
+  }
+
+  .hud {
+    text-align: left;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    line-height: 1.6;
+  }
+
+  .hud .track {
+    max-width: none;
+  }
+
+  .hint {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    max-width: none;
+  }
+
+  .name {
+    font-size: 15px;
+  }
+
+  .links {
+    gap: 14px;
+  }
+}
+
+/* Fingers need bigger targets than a cursor, and thumbs need the thumb hint
+   whatever the width. */
+@media (pointer: coarse) {
+  .tag {
+    font-size: 12px;
+    padding: 10px 10px 10px 30px;
+    margin: -10px 0 0 -10px;
+  }
+
+  .links a {
+    padding: 12px 10px;
+    margin: -12px -10px;
+  }
+
+  .wide {
+    display: none !important;
+  }
+
+  .hint.narrow {
+    display: block;
+    max-width: none;
   }
 }
 

@@ -8,7 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { Swarm, QUEUED, RESERVED, TRANSIT, mulberry32, type LaneSpec } from './swarm'
 import { Surface, SPIN_RATE } from './surface'
 import { buildGround } from './structures'
-import { makePlanet, ATMOSPHERE_FRAG, ATMOSPHERE_VERT, NOISE_GLSL, PLANET_FRAG, PLANET_VERT } from './planet'
+import { makePlanet, ATMOSPHERE_FRAG, ATMOSPHERE_VERT, NOISE_GLSL, PLANET_FRAG, PLANET_VERT, SHADER_DEFINES } from './planet'
 import { BELT_SPECS, buildSystem, positionOf, spinOf, type Body } from './system'
 import { AMBIENT_INTENSITY, AMBIENT_LIGHT, SUN_INTENSITY, SUN_LIGHT, asteroidBelt, lightUniforms, ringMaterial, trojans, worldMaterial, type Belt } from './worlds'
 import { Economy } from './economy'
@@ -44,7 +44,35 @@ const LANES: LaneSpec[] = [
 ]
 const SUN_R = 10
 const TIME_SCALE = 1.8 // simulation seconds per real second
-const WARMUP_S = 45 // seconds simulated before the first frame, so streams are already flowing
+
+// Two quality tiers. Phones and small machines get fewer sails, stars and
+// belt rocks, a lower pixel ratio, bloom at half resolution, three noise
+// octaves instead of five, coarser spheres and a shorter warm up. ?mobile=1
+// forces the light tier anywhere, for testing.
+type Quality = {
+  pixelRatio: number
+  sails: number // share of each lane's fleet
+  bloom: number // bloom buffer scale
+  octaves: number
+  segs: number // segments on Earth's sphere; others scale from it
+  stars: number
+  belts: number
+  texture: number // Earth's height map width
+  warmup: number // seconds simulated before the first frame
+}
+const FULL: Quality = { pixelRatio: 2, sails: 1, bloom: 1, octaves: 5, segs: 96, stars: 1, belts: 1, texture: 1024, warmup: 45 }
+const LIGHT: Quality = { pixelRatio: 1.5, sails: 0.5, bloom: 0.5, octaves: 3, segs: 48, stars: 0.4, belts: 0.4, texture: 512, warmup: 25 }
+function pickQuality(): Quality {
+  const q = new URLSearchParams(location.search).get('mobile')
+  if (q === '1') return LIGHT
+  if (q === '0') return FULL
+  const coarse = window.matchMedia('(pointer: coarse)').matches
+  // Judge the device, not the window: a laptop with a short window is not a phone.
+  const small = Math.min(window.screen.width, window.screen.height) < 700
+  const nav = navigator as Navigator & { deviceMemory?: number }
+  const weak = (navigator.hardwareConcurrency || 8) <= 2 || (nav.deviceMemory || 8) <= 2
+  return coarse || small || weak ? LIGHT : FULL
+}
 const SHELL_RADII = [330] // one shell, just outside the outermost sail lane
 // The world has been running since this moment; a visitor arrives at the
 // stage of construction the clock says, and the build restarts each cycle.
@@ -203,7 +231,7 @@ export type Counts = {
   satisfaction: number
 }
 
-type Sim = { counts: () => Counts; focusText: () => string; land: () => void; dispose: () => void }
+type Sim = { counts: () => Counts; focusText: () => string; focusKind: () => Focus['kind']; land: () => void; pullBack: () => void; dispose: () => void }
 
 type Node = {
   body: Body
@@ -216,9 +244,12 @@ type Node = {
   pos: THREE.Vector3
 }
 
-function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: boolean): Sim {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: boolean, onFirstFrame: () => void): Sim {
+  const quality = pickQuality()
+  SHADER_DEFINES.FBM_OCTAVES = quality.octaves
+  const WARMUP_S = quality.warmup
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === FULL, powerPreference: 'high-performance' })
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatio))
   renderer.setSize(window.innerWidth, window.innerHeight, false)
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -234,7 +265,15 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   // on Intel graphics at a 1.5 display scale, so none of that here.
   const composer = new EffectComposer(renderer)
   composer.addPass(new RenderPass(scene, camera))
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.5, 0.72))
+  // The composer resizes every pass to the full drawing buffer when it is
+  // added and on every resize, so the bloom chain is sized by hand after both.
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.72)
+  composer.addPass(bloom)
+  const sizeBloom = () => {
+    const pr = renderer.getPixelRatio()
+    bloom.setSize(window.innerWidth * pr * quality.bloom, window.innerHeight * pr * quality.bloom)
+  }
+  sizeBloom()
   composer.addPass(new OutputPass())
 
   const controls = new OrbitControls(camera, canvas)
@@ -244,6 +283,9 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   controls.maxDistance = LIMITS.star.max
   controls.zoomSpeed = 0.9
   controls.rotateSpeed = 0.6
+  // The camera always rides its subject, so a pan would be undone each
+  // frame; two fingers zoom instead.
+  controls.enablePan = false
   controls.autoRotate = !reduceMotion
   controls.autoRotateSpeed = 0.35
   let idleTimer = 0
@@ -292,19 +334,20 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     g.setAttribute('position', new THREE.BufferAttribute(p, 3))
     scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size, sizeAttenuation: false, map: dot, color: colour, transparent: true, opacity, depthWrite: false })))
   }
-  starLayer(6000, 26000, 34000, 1.6, '#b9c8ff', 0.5)
-  starLayer(1400, 24000, 30000, 2.4, '#dbe4ff', 0.7)
-  starLayer(180, 22000, 26000, 3.6, '#ffffff', 0.9)
+  starLayer(Math.round(6000 * quality.stars), 26000, 34000, 1.6, '#b9c8ff', 0.5)
+  starLayer(Math.round(1400 * quality.stars), 24000, 30000, 2.4, '#dbe4ff', 0.7)
+  starLayer(Math.round(180 * quality.stars), 22000, 26000, 3.6, '#ffffff', 0.9)
 
   // The Sun.
   const star = new THREE.Group()
   const sunUniforms = { uTime: { value: 0 } }
-  const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_R, 96, 96), new THREE.ShaderMaterial({ uniforms: sunUniforms, vertexShader: SUN_VERT, fragmentShader: SUN_FRAG }))
+  const defines = { ...SHADER_DEFINES }
+  const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_R, quality.segs, quality.segs), new THREE.ShaderMaterial({ defines, uniforms: sunUniforms, vertexShader: SUN_VERT, fragmentShader: SUN_FRAG }))
   star.add(sunMesh)
   star.add(
     new THREE.Mesh(
       new THREE.SphereGeometry(SUN_R * 1.45, 96, 96),
-      new THREE.ShaderMaterial({ uniforms: sunUniforms, vertexShader: SUN_VERT, fragmentShader: CORONA_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide }),
+      new THREE.ShaderMaterial({ defines, uniforms: sunUniforms, vertexShader: SUN_VERT, fragmentShader: CORONA_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide }),
     ),
   )
   const sprite = (tex: THREE.Texture, sx: number, sy: number, colour: string, opacity: number) => {
@@ -320,6 +363,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   // The system as the real sky has it today, plus the swarm's own random stream.
   const rand = mulberry32(2026)
   const bodies = buildSystem(new Date(), rand)
+  const lanes: LaneSpec[] = LANES.map((l) => ({ ...l, n: Math.round(l.n * quality.sails) }))
   const earthIndex = bodies.findIndex((b) => b.name === 'Earth')
   const earth = bodies[earthIndex]
   earth.spin0 = 0 // the ground simulation counts its day from zero
@@ -329,7 +373,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   // carrying the surface and everything built on it.
   const planet = new THREE.Group()
   const spin = new THREE.Group()
-  const tex = makePlanet(3)
+  const tex = makePlanet(3, quality.texture)
   const aniso = renderer.capabilities.getMaxAnisotropy()
   tex.height.anisotropy = aniso
   tex.clouds.anisotropy = aniso
@@ -347,7 +391,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     uIce: { value: lin('#e8f0ff') },
     uCity: { value: lin('#ffcd82') },
   }
-  const surface = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R, 96, 64), new THREE.ShaderMaterial({ uniforms: planetUniforms, vertexShader: PLANET_VERT, fragmentShader: PLANET_FRAG }))
+  const surface = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R, quality.segs, Math.round(quality.segs * 0.67)), new THREE.ShaderMaterial({ defines, uniforms: planetUniforms, vertexShader: PLANET_VERT, fragmentShader: PLANET_FRAG }))
   spin.add(surface)
   const cloudMat = new THREE.MeshLambertMaterial({ map: tex.clouds, transparent: true, depthWrite: false, opacity: 0.95 })
   const clouds = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R * 1.025, 64, 48), cloudMat)
@@ -399,7 +443,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       tilt.quaternion.copy(frameOf(body.Q))
       sp = new THREE.Group()
       tilt.add(sp)
-      const segs = body.R > 20 ? 96 : body.R > 6 ? 64 : 32
+      const segs = Math.max(28, Math.round((body.R > 20 ? 96 : body.R > 6 ? 64 : 32) * (quality.segs / 96)))
       if (body.look === 'comet') {
         mesh = new THREE.Mesh(new THREE.SphereGeometry(body.R, 16, 12), new THREE.MeshBasicMaterial({ color: '#8d99ab' }))
         const coma = new THREE.Sprite(new THREE.SpriteMaterial({ map: blueGlow, color: '#cfe4ff', transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }))
@@ -407,7 +451,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
         tilt.add(coma)
       } else {
         mat = worldMaterial(body.look === 'earth' ? { c0: '#fff', c1: '#fff', c2: '#fff', c3: '#fff', bands: 0, turb: 0, crater: 0, capSize: 0, seed: 0 } : body.look)
-        mesh = new THREE.Mesh(new THREE.SphereGeometry(body.R, segs, Math.round(segs * 0.66)), mat)
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(body.R, segs, Math.max(20, Math.round(segs * 0.66))), mat)
       }
       sp.add(mesh)
       if (body.rings) {
@@ -438,9 +482,10 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     scene.add(pts)
     belts.push({ belt, attr })
   }
-  addBelt(asteroidBelt(BELT_SPECS.asteroids, rand), '#bdb2a0', 1.7)
-  addBelt(trojans(jupiter, BELT_SPECS.trojans.n, BELT_SPECS.trojans.spread, BELT_SPECS.trojans.eMax, BELT_SPECS.trojans.iMax, rand), '#aaa49b', 1.6)
-  addBelt(asteroidBelt(BELT_SPECS.kuiper, rand), '#9fb3cc', 1.7)
+  const scaled = (spec: typeof BELT_SPECS.asteroids) => ({ ...spec, n: Math.round(spec.n * quality.belts) })
+  addBelt(asteroidBelt(scaled(BELT_SPECS.asteroids), rand), '#bdb2a0', 1.7)
+  addBelt(trojans(jupiter, Math.round(BELT_SPECS.trojans.n * quality.belts), BELT_SPECS.trojans.spread, BELT_SPECS.trojans.eMax, BELT_SPECS.trojans.iMax, rand), '#aaa49b', 1.6)
+  addBelt(asteroidBelt(scaled(BELT_SPECS.kuiper), rand), '#9fb3cc', 1.7)
 
   // The comet's tail: points streaming away from the Sun, longer the closer it is.
   const TAIL = 110
@@ -470,7 +515,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   const e0 = new Float64Array(3)
   const v0 = new Float64Array(3)
   positionOf(earth, 0, null, e0, v0)
-  const swarm = new Swarm(LANES, e0, v0, PLANET_R, 7)
+  const swarm = new Swarm(lanes, e0, v0, PLANET_R, 7)
   const ground = new Surface(PLANET_R, swarm, earth.Q, 11)
 
   // The engine: an economy on Earth, the sphere the rockets build, the
@@ -591,6 +636,9 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   const sailMat = new THREE.MeshBasicMaterial({ map: sailTexture(), color: '#b4ccff', side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
   const sails = new THREE.InstancedMesh(sailGeo, sailMat, swarm.N)
   sails.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  // Instances spread over the whole system; three's one-off bounding sphere
+  // from the first frame would cull them all once Earth has moved on.
+  sails.frustumCulled = false
   scene.add(sails)
 
   const tmp = new THREE.Vector3()
@@ -648,6 +696,14 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   }
   placeBodies()
 
+  // The star view: far enough that the finished sphere, radius 330, fits the
+  // narrower side of the screen, so a phone in portrait pulls further back.
+  const starDist = () => {
+    const tanHalf = Math.tan((camera.fov * Math.PI) / 360)
+    const narrow = Math.min(1, camera.aspect)
+    return Math.max(900, (330 * 1.18) / (tanHalf * narrow))
+  }
+
   // Open with the Sun in the middle and Earth beside it, from the far side of
   // the Sun so the launch streams curve in toward the camera.
   {
@@ -655,7 +711,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     const side = new THREE.Vector3().crossVectors(away, new THREE.Vector3(0, 1, 0)).normalize()
     const dir = away.multiplyScalar(Math.cos(0.36)).addScaledVector(side, Math.sin(0.36))
     dir.y += 0.26
-    camera.position.copy(dir.normalize().multiplyScalar(900))
+    camera.position.copy(dir.normalize().multiplyScalar(starDist()))
     controls.target.set(0, 0, 0)
     controls.update()
   }
@@ -725,11 +781,11 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   }
   const pullBack = () => {
     if (focus.kind === 'star') return
-    if (focus.kind === 'ground' || focus.kind === 'body' || focus.kind === 'rocket') setFocus({ kind: 'star' }, 900, 2)
+    if (focus.kind === 'ground' || focus.kind === 'body' || focus.kind === 'rocket') setFocus({ kind: 'star' }, starDist(), 2)
     else {
       const onGround = focus.kind === 'bot' || swarm.state[focus.i] === RESERVED
       if (onGround) setFocus({ kind: 'ground', body: spin.worldToLocal(anchorOf(focus, tmp).clone()) }, 10)
-      else setFocus({ kind: 'star' }, 900, 2)
+      else setFocus({ kind: 'star' }, starDist(), 2)
     }
   }
 
@@ -738,11 +794,16 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   const ndc = new THREE.Vector2()
   let press: { x: number; y: number; t: number } | null = null
   const onDown = (e: PointerEvent) => {
+    // A second finger is a pinch, never a tap.
+    if (!e.isPrimary) {
+      press = null
+      return
+    }
     if (e.button === 0) press = { x: e.clientX, y: e.clientY, t: performance.now() }
   }
   const solids = [sunMesh, ...nodes.map((n) => n.mesh)]
   const onUp = (e: PointerEvent) => {
-    if (!press) return
+    if (!e.isPrimary || !press) return
     const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y)
     const held = performance.now() - press.t
     press = null
@@ -754,13 +815,24 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     const hits = raycaster.intersectObjects(solids, false)
     const solid = hits.length ? hits[0] : null
     const occluder = solid ? solid.distance : Infinity
+    // The Sun wins outright: from far away it sits in a haze of sub pixel sails.
+    if (solid && solid.object === sunMesh) {
+      setFocus({ kind: 'star' }, starDist(), 2)
+      return
+    }
     let best: Focus | null = null
     let bestDist = 0
-    let bestPx = 12
-    const consider = (f: Focus, dist: number) => {
+    // A sail near Earth crosses twenty pixels in the time a tap takes, and a
+    // thumb is wider than a cursor.
+    let bestPx = window.matchMedia('(pointer: coarse)').matches ? 28 : 18
+    // Pixels per scene unit at a distance, so a thing smaller than a few
+    // pixels is never a tap target.
+    const pxAt = (d: number) => window.innerHeight / (2 * d * Math.tan((camera.fov * Math.PI) / 360))
+    const consider = (f: Focus, dist: number, size = 0) => {
       // tmp holds the world position.
       const d = tmp.distanceTo(camera.position)
       if (d > occluder) return
+      if (size > 0 && size * pxAt(d) < 3) return
       tmp.project(camera)
       if (tmp.z > 1) return
       const px = Math.hypot(((tmp.x + 1) / 2) * window.innerWidth - e.clientX, ((1 - tmp.y) / 2) * window.innerHeight - e.clientY)
@@ -771,23 +843,27 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       }
     }
     for (let i = 0; i < swarm.N; i++) {
-      if (swarm.scaleOf(i) === 0) continue
+      const k = swarm.scaleOf(i)
+      if (k === 0) continue
       tmp.set(swarm.pos[i * 3], swarm.pos[i * 3 + 1], swarm.pos[i * 3 + 2])
-      consider({ kind: 'sail', i }, 9)
+      consider({ kind: 'sail', i }, 9, 2.2 * k)
     }
-    for (let p = 0; p < ground.nPackages; p++) {
-      if (!ground.pkAlive[p]) continue
-      tmp.set(ground.pkPos[p * 3], ground.pkPos[p * 3 + 1], ground.pkPos[p * 3 + 2]).applyMatrix4(spin.matrixWorld)
-      consider({ kind: 'sail', i: ground.pkSail[p] }, 2.2)
-    }
-    for (let b = 0; b < ground.nBots; b++) {
-      tmp.set(ground.botPos[b * 3], ground.botPos[b * 3 + 1], ground.botPos[b * 3 + 2]).applyMatrix4(spin.matrixWorld)
-      consider({ kind: 'bot', b }, 2.2)
+    // Things on the ground are only targets from close to Earth.
+    if (camera.position.distanceTo(planet.position) < 400) {
+      for (let p = 0; p < ground.nPackages; p++) {
+        if (!ground.pkAlive[p]) continue
+        tmp.set(ground.pkPos[p * 3], ground.pkPos[p * 3 + 1], ground.pkPos[p * 3 + 2]).applyMatrix4(spin.matrixWorld)
+        consider({ kind: 'sail', i: ground.pkSail[p] }, 2.2, 0.2)
+      }
+      for (let b = 0; b < ground.nBots; b++) {
+        tmp.set(ground.botPos[b * 3], ground.botPos[b * 3 + 1], ground.botPos[b * 3 + 2]).applyMatrix4(spin.matrixWorld)
+        consider({ kind: 'bot', b }, 2.2, 0.2)
+      }
     }
     for (let r = 0; r < rockets.N; r++) {
       if (!rockets.alive[r]) continue
       tmp.set(rockets.pos[r * 3], rockets.pos[r * 3 + 1], rockets.pos[r * 3 + 2])
-      consider({ kind: 'rocket', r }, 12)
+      consider({ kind: 'rocket', r }, 12, 3.6)
     }
     if (best) {
       setFocus(best, bestDist)
@@ -798,7 +874,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       const here = camera.position.distanceTo(controls.target)
       const dist = focus.kind === 'ground' ? Math.max(1.2, here * 0.4) : 48
       setFocus({ kind: 'ground', body: spin.worldToLocal(solid.point.clone()) }, dist, focus.kind === 'ground' ? 1.2 : 2.2)
-    } else if (solid.object === sunMesh) setFocus({ kind: 'star' }, 900, 2)
+    } else if (solid.object === sunMesh) setFocus({ kind: 'star' }, starDist(), 2)
     else {
       const bi = nodeOfMesh.get(solid.object)
       if (bi !== undefined) flyTo(bi)
@@ -872,7 +948,22 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
 
   // Tags ride with their worlds while those are small on screen. Moons only
   // show once you are near their planet.
+  // The bands the overlay text occupies, measured now and then, so no tag
+  // is drawn under the name or the readout and its scrim.
+  let bandTop = 0
+  let bandBottom = window.innerHeight
+  let bandClock = 0
+  const nameEl = document.querySelector('.name')
+  const footEl = document.querySelector('.foot')
+  const measureBands = () => {
+    bandTop = nameEl ? nameEl.getBoundingClientRect().bottom + 8 : 0
+    bandBottom = footEl ? footEl.getBoundingClientRect().top - 40 : window.innerHeight
+  }
   const placeTags = () => {
+    if (--bandClock <= 0) {
+      bandClock = 30
+      measureBands()
+    }
     const camDist = camera.position.distanceTo(controls.target)
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i]
@@ -907,7 +998,9 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
         if (tmp.z < 1 && Math.abs(tmp.x) < 0.97 && Math.abs(tmp.y) < 0.97) {
           const x = ((tmp.x + 1) / 2) * window.innerWidth
           const y = ((1 - tmp.y) / 2) * window.innerHeight
-          n.tag.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px)`
+          // The label hangs to the right of its mark; keep it on screen.
+          if (x > window.innerWidth - 96 || y > bandBottom || y < bandTop) show = false
+          else n.tag.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px)`
         } else show = false
       }
       n.tag.style.opacity = show ? '1' : '0'
@@ -915,6 +1008,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     }
   }
 
+  let firstFrame = true
   function render() {
     const wall = Math.min(clock.getDelta(), 0.25)
     const real = Math.min(wall, 1 / 20)
@@ -925,19 +1019,60 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
 
     placeBodies()
 
+    // Each sail faces the Sun and turns slowly in its own plane. The matrix is
+    // written straight into the instance buffer: a basis from the Sun
+    // direction, rolled by the sail's own angle, scaled, then the position.
     const { pos, N } = swarm
+    const arr = sails.instanceMatrix.array as Float32Array
     for (let i = 0; i < N; i++) {
       const k = swarm.scaleOf(i)
+      const o = i * 16
       if (k === 0) {
-        sails.setMatrixAt(i, zero)
+        for (let q = 0; q < 15; q++) arr[o + q] = 0
+        arr[o + 15] = 1
         continue
       }
-      dummy.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])
-      dummy.lookAt(origin)
-      dummy.rotateZ(i * 0.7 + t * 0.2)
-      dummy.scale.setScalar(k)
-      dummy.updateMatrix()
-      sails.setMatrixAt(i, dummy.matrix)
+      const px = pos[i * 3]
+      const py = pos[i * 3 + 1]
+      const pz = pos[i * 3 + 2]
+      const pl = Math.hypot(px, py, pz) || 1
+      const zx = -px / pl
+      const zy = -py / pl
+      const zz = -pz / pl
+      // x axis: up cross z, or +x when the Sun is straight up or down.
+      let xx = zz
+      let xy = 0
+      let xz = -zx
+      const xl = Math.hypot(xx, xz)
+      if (xl < 1e-6) {
+        xx = 1
+        xz = 0
+      } else {
+        xx /= xl
+        xz /= xl
+      }
+      const yx = zy * xz - zz * xy
+      const yy = zz * xx - zx * xz
+      const yz = zx * xy - zy * xx
+      const th = i * 0.7 + t * 0.2
+      const c = Math.cos(th) * k
+      const s = Math.sin(th) * k
+      arr[o] = c * xx + s * yx
+      arr[o + 1] = c * xy + s * yy
+      arr[o + 2] = c * xz + s * yz
+      arr[o + 3] = 0
+      arr[o + 4] = -s * xx + c * yx
+      arr[o + 5] = -s * xy + c * yy
+      arr[o + 6] = -s * xz + c * yz
+      arr[o + 7] = 0
+      arr[o + 8] = zx * k
+      arr[o + 9] = zy * k
+      arr[o + 10] = zz * k
+      arr[o + 11] = 0
+      arr[o + 12] = px
+      arr[o + 13] = py
+      arr[o + 14] = pz
+      arr[o + 15] = 1
     }
     sails.instanceMatrix.needsUpdate = true
     built.update(camera)
@@ -969,8 +1104,8 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
 
     // A followed sail that has been recycled or absorbed is gone, and so is
     // a rocket that has arrived; go back to the Sun.
-    if (focus.kind === 'sail' && swarm.state[focus.i] === QUEUED) setFocus({ kind: 'star' }, 900, 2)
-    if (focus.kind === 'rocket' && !rockets.alive[focus.r]) setFocus({ kind: 'star' }, 900, 2)
+    if (focus.kind === 'sail' && swarm.state[focus.i] === QUEUED) setFocus({ kind: 'star' }, starDist(), 2)
+    if (focus.kind === 'rocket' && !rockets.alive[focus.r]) setFocus({ kind: 'star' }, starDist(), 2)
 
     // Keep the camera riding with its subject: the subject moved, so the
     // target and the camera move by the same amount. A tween blends the
@@ -1011,13 +1146,25 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     placeTags()
     controls.update()
     composer.render()
+    if (firstFrame) {
+      firstFrame = false
+      onFirstFrame()
+    }
   }
 
   const onResize = () => {
+    const before = starDist()
     camera.aspect = window.innerWidth / window.innerHeight
     camera.updateProjectionMatrix()
     renderer.setSize(window.innerWidth, window.innerHeight, false)
     composer.setSize(window.innerWidth, window.innerHeight)
+    sizeBloom()
+    measureBands()
+    // A phone turned on its side gets the star view refitted to the new shape.
+    if (focus.kind === 'star' && !tween) {
+      const after = starDist()
+      if (after !== before) camera.position.sub(controls.target).multiplyScalar(after / before).add(controls.target)
+    }
     if (reduceMotion) render()
   }
   window.addEventListener('resize', onResize)
@@ -1027,9 +1174,14 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     render()
     controls.addEventListener('change', render)
   } else {
-    const loop = () => {
-      render()
+    // On the light tier a 120 Hz phone gets every other frame; the clock
+    // carries the skipped time so the simulation runs at the same pace.
+    let last = 0
+    const loop = (now: number) => {
       raf = requestAnimationFrame(loop)
+      if (quality === LIGHT && now - last < 15) return
+      last = now
+      render()
     }
     raf = requestAnimationFrame(loop)
   }
@@ -1083,9 +1235,20 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       }
       let best: { x: number; y: number } | null = null
       let bestD = Infinity
+      const eye = camera.position
       for (let i = 0; i < swarm.N; i++) {
-        if (swarm.state[i] !== TRANSIT || swarm.age[i] < 12) continue
-        const s = toScreen(new THREE.Vector3(swarm.pos[i * 3], swarm.pos[i * 3 + 1], swarm.pos[i * 3 + 2]))
+        if (swarm.state[i] !== TRANSIT || swarm.age[i] < 1) continue
+        // Where the sail will be a tenth of a second on, since the click
+        // lands that much later, and only if Earth is not in the way.
+        const lead = 0.1 * TIME_SCALE
+        const p = new THREE.Vector3(swarm.pos[i * 3] + swarm.vel[i * 3] * lead, swarm.pos[i * 3 + 1] + swarm.vel[i * 3 + 1] * lead, swarm.pos[i * 3 + 2] + swarm.vel[i * 3 + 2] * lead)
+        const ray = p.clone().sub(eye)
+        const len = ray.length()
+        ray.divideScalar(len)
+        const toEarth = planet.position.clone().sub(eye)
+        const along = toEarth.dot(ray)
+        if (along > 0 && along < len && toEarth.lengthSq() - along * along < PLANET_R * PLANET_R) continue
+        const s = toScreen(p)
         if (!s) continue
         const d = Math.hypot(s.x - window.innerWidth / 2, s.y - window.innerHeight / 2)
         if (d < bestD) {
@@ -1119,6 +1282,8 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
         satisfaction: er.demandMW > 0 ? Math.min(1, er.supplyMW / er.demandMW) : 1,
       }
     },
+    focusKind: () => focus.kind,
+    pullBack,
     focusText,
     land,
     dispose() {
@@ -1181,6 +1346,9 @@ export default function App() {
   const [counts, setCounts] = useState<Counts>(EMPTY)
   const [track, setTrack] = useState('')
   const [webgl, setWebgl] = useState(true)
+  const [ready, setReady] = useState(false)
+  const [focusKind, setFocusKind] = useState<Focus['kind']>('star')
+  const simRef = useRef<Sim | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -1189,7 +1357,8 @@ export default function App() {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     let sim: Sim
     try {
-      sim = startScene(canvas, tags, reduce)
+      sim = startScene(canvas, tags, reduce, () => setReady(true))
+      simRef.current = sim
     } catch {
       setWebgl(false)
       return
@@ -1197,6 +1366,7 @@ export default function App() {
     const tick = window.setInterval(() => {
       setCounts(sim.counts())
       setTrack(sim.focusText())
+      setFocusKind(sim.focusKind())
     }, 250)
     return () => {
       window.clearInterval(tick)
@@ -1208,6 +1378,11 @@ export default function App() {
     <>
       <canvas ref={canvasRef} className="sky" />
       <div ref={tagsRef} className="tags" aria-label="Worlds" />
+      {focusKind !== 'star' && (
+        <button className="back" type="button" onClick={() => simRef.current?.pullBack()} aria-label="Pull back">
+          back
+        </button>
+      )}
       {!webgl && (
         <div className="nogl">
           <p>This page draws the solar system in WebGL, which your browser has turned off.</p>
@@ -1228,25 +1403,29 @@ export default function App() {
                 </a>
               ))}
             </nav>
-            <p className="hint">
+            {!ready && webgl && <p className="hint loading">loading the solar system</p>}
+            <p className="hint wide">
               the solar system as it stands today, distances and sizes compressed
               <br />
               drag to orbit, scroll to zoom, click a world to fly there
               <br />
               click earth to land, click a sail or a bot to ride along, esc to pull back
             </p>
+            <p className="hint narrow">
+              the solar system today, compressed. drag to orbit, pinch to zoom, tap a world to fly there, tap earth to land
+            </p>
           </div>
           <div className="hud" aria-live="polite">
             <div>
               Dyson sphere <b>{gw(counts.powerMW)}</b>, <b>{(counts.completion * 100).toFixed(1)}%</b> built
             </div>
-            <div>
+            <div className="wide">
               <b>{n(counts.nodesDone)}</b> of {n(counts.nodes)} nodes, <b>{n(counts.framesDone)}</b> of {n(counts.frames)} frames, <b>{n(counts.cells)}</b> cells
             </div>
             <div>
               swarm <b>{n(counts.orbit)}</b> in orbit, <b>{n(counts.transit)}</b> in transit, <b>{n(counts.absorbing)}</b> being absorbed
             </div>
-            <div>
+            <div className="wide">
               <b>{n(counts.rocketsFlying)}</b> rockets in flight, <b>{n(counts.inWindow)}</b> of {n(counts.guns)} rails in their window
             </div>
             <div>
