@@ -14,3 +14,4 @@ dist-ssr
 # bundled test harness output
 tools/*.mjs.map
 tools/ground_test.mjs
+tools/*_test.mjs
