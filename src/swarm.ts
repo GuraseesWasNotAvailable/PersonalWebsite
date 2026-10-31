@@ -22,15 +22,21 @@ export const TRANSIT = 1
 export const ORBIT = 2
 export const FADING = 3
 export const RESERVED = 4 // being built, carried or loaded on the ground
+export const ABSORB = 5 // chosen for a shell face, steering in to be absorbed
 
 export const FADE_S = 4 // seconds a sail takes to shrink away
 export const UNFURL_S = 6 // seconds after launch the sail takes to open
-const LIFE_MIN = 170 // seconds a sail stays in orbit before it is recycled
-const LIFE_SPREAD = 130
+const LIFE_MIN = 230 // seconds a sail stays in orbit before it is recycled
+const LIFE_SPREAD = 150
 
 // Steering gains: strong on the way out, gentle once captured.
 const TRANSIT_GAINS = { kv: 1.4, kr: 0.6, kn: 0.6, amax: 3.4 }
 const ORBIT_GAINS = { kv: 0.35, kr: 0.25, kn: 0.25, amax: 0.35 }
+// Absorption: fly at a face at up to this speed, slowing on approach.
+const ABSORB_SPEED = 14
+const ABSORB_GAIN = 1.2
+const ABSORB_AMAX = 4
+const ABSORB_RADIUS = 4
 
 export function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -65,6 +71,11 @@ export class Swarm {
   // Each sail has its own orbit near the lane, so a lane is a band, not a line.
   readonly dR: Float32Array
   readonly dN: Float32Array
+  // Absorbing sails: the face they are bound for (a key the caller defines)
+  // and its centroid, refreshed by the caller each step since the sphere turns.
+  readonly face: Int32Array
+  readonly target: Float32Array
+  absorbed = 0
   readonly lanes: Array<{ R: number; vc: number; n: number[]; u: number[]; w: number[] }>
   readonly planetPos = new Float64Array(3)
   readonly planetVel = new Float64Array(3)
@@ -86,6 +97,8 @@ export class Swarm {
     this.age = new Float32Array(this.N)
     this.dR = new Float32Array(this.N)
     this.dN = new Float32Array(this.N)
+    this.face = new Int32Array(this.N).fill(-1)
+    this.target = new Float32Array(this.N * 3)
     this.lanes = lanes.map((l) => ({ R: l.r, vc: Math.sqrt(GM / l.r), ...laneFrame(l.tilt) }))
     this.planetRadius = planetRadius
 
@@ -99,9 +112,9 @@ export class Swarm {
     lanes.forEach((l, li) => {
       for (let k = 0; k < l.n; k++, i++) {
         this.lane[i] = li
-        this.dR[i] = (this.rand() - 0.5) * 36
-        this.dN[i] = (this.rand() - 0.5) * 26
-        if (this.rand() < 0.42) this.placeInOrbit(i, this.rand() * Math.PI * 2)
+        this.dR[i] = (this.rand() - 0.5) * 24
+        this.dN[i] = (this.rand() - 0.5) * 18
+        if (this.rand() < 0.58) this.placeInOrbit(i, this.rand() * Math.PI * 2)
         else this.state[i] = QUEUED
       }
     })
@@ -146,6 +159,52 @@ export class Swarm {
     if (this.state[i] === RESERVED) this.state[i] = QUEUED
   }
 
+  // Send up to `count` orbiting sails nearest a face centroid to be absorbed
+  // there. Returns how many were sent. A small insertion sort keeps the
+  // nearest few without allocating.
+  pickForFace(key: number, cx: number, cy: number, cz: number, count: number): number {
+    const n = Math.min(count, 8)
+    if (n <= 0) return 0
+    const bestI = this.pickI
+    const bestD = this.pickD
+    for (let k = 0; k < n; k++) {
+      bestI[k] = -1
+      bestD[k] = Infinity
+    }
+    const { pos, state } = this
+    for (let i = 0; i < this.N; i++) {
+      if (state[i] !== ORBIT) continue
+      const o = i * 3
+      const dx = pos[o] - cx
+      const dy = pos[o + 1] - cy
+      const dz = pos[o + 2] - cz
+      const d = dx * dx + dy * dy + dz * dz
+      if (d >= bestD[n - 1]) continue
+      let k = n - 1
+      while (k > 0 && bestD[k - 1] > d) {
+        bestD[k] = bestD[k - 1]
+        bestI[k] = bestI[k - 1]
+        k--
+      }
+      bestD[k] = d
+      bestI[k] = i
+    }
+    let sent = 0
+    for (let k = 0; k < n; k++) {
+      const i = bestI[k]
+      if (i < 0) break
+      state[i] = ABSORB
+      this.face[i] = key
+      this.target[i * 3] = cx
+      this.target[i * 3 + 1] = cy
+      this.target[i * 3 + 2] = cz
+      sent++
+    }
+    return sent
+  }
+  private readonly pickI = new Int32Array(8)
+  private readonly pickD = new Float64Array(8)
+
   // Fire a reserved sail from an ejector: an inertial position and velocity.
   launch(i: number, pos: ArrayLike<number>, vel: ArrayLike<number>) {
     const o = i * 3
@@ -161,7 +220,9 @@ export class Swarm {
   }
 
   // One step of semi-implicit Euler for the planet and every active sail.
-  step(dt: number) {
+  // `centroid` refreshes an absorbing sail's target from its face key;
+  // `onAbsorbed` is told when a sail arrives and its slot returns to the queue.
+  step(dt: number, centroid?: (key: number, out: Float32Array, o: number) => void, onAbsorbed?: (i: number, key: number) => void) {
     this.time += dt
     const pp = this.planetPos
     const pv = this.planetVel
@@ -191,6 +252,44 @@ export class Swarm {
       let ax = -px * inv3
       let ay = -py * inv3
       let az = -pz * inv3
+
+      if (st === ABSORB) {
+        // Steer at the face: a velocity toward it that eases off on approach.
+        if (centroid) centroid(this.face[i], this.target, o)
+        const tx = this.target[o] - px
+        const ty = this.target[o + 1] - py
+        const tz = this.target[o + 2] - pz
+        const dist = Math.hypot(tx, ty, tz)
+        if (dist < ABSORB_RADIUS) {
+          state[i] = QUEUED
+          this.absorbed++
+          if (onAbsorbed) onAbsorbed(i, this.face[i])
+          this.face[i] = -1
+          continue
+        }
+        const want = Math.min(ABSORB_SPEED, 2 + dist * 0.6) / dist
+        let gx = ABSORB_GAIN * (tx * want - vx)
+        let gy = ABSORB_GAIN * (ty * want - vy)
+        let gz = ABSORB_GAIN * (tz * want - vz)
+        const gl = Math.hypot(gx, gy, gz)
+        if (gl > ABSORB_AMAX) {
+          const s = ABSORB_AMAX / gl
+          gx *= s
+          gy *= s
+          gz *= s
+        }
+        vx += (ax + gx) * dt
+        vy += (ay + gy) * dt
+        vz += (az + gz) * dt
+        vel[o] = vx
+        vel[o + 1] = vy
+        vel[o + 2] = vz
+        pos[o] = px + vx * dt
+        pos[o + 1] = py + vy * dt
+        pos[o + 2] = pz + vz * dt
+        age[i] += dt
+        continue
+      }
       // The planet pulls too; it only matters in the first seconds of a launch.
       const dx = px - ppx
       const dy = py - ppy
@@ -272,6 +371,7 @@ export class Swarm {
   scaleOf(i: number): number {
     const st = this.state[i]
     if (st === QUEUED || st === RESERVED) return 0
+    if (st === ABSORB) return 1
     if (st === FADING) return Math.max(0, 1 - this.timer[i] / FADE_S)
     if (st === TRANSIT) {
       const u = Math.min(1, this.age[i] / UNFURL_S)
@@ -284,12 +384,14 @@ export class Swarm {
     let orbit = 0
     let transit = 0
     let ground = 0
+    let absorbing = 0
     for (let i = 0; i < this.N; i++) {
       const s = this.state[i]
       if (s === ORBIT || s === FADING) orbit++
       else if (s === TRANSIT) transit++
       else if (s === RESERVED) ground++
+      else if (s === ABSORB) absorbing++
     }
-    return { orbit, transit, ground, launched: this.launched }
+    return { orbit, transit, ground, absorbing, launched: this.launched, absorbed: this.absorbed }
   }
 }

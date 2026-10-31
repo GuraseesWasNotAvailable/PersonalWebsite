@@ -4,7 +4,7 @@
 // packages and bots as instances refreshed every frame. One draw call per
 // kind, so a planet full of industry costs about twenty.
 import * as THREE from 'three'
-import { DOCK_XY, DOOR_X, DOOR_Y, GUN_Y, MINE_XY, PAD_R, PK_RAIL, PK_STACK, RACK_PITCH, RACK_X0, S, Surface, BARREL_LEN, siteFrame, type Frame, type Path } from './surface'
+import { DOCK_XY, DOOR_X, DOOR_Y, GUN_Y, MINE_XY, PAD_R, PK_RAIL, PK_STACK, RACK_PITCH, RACK_X0, S, SILO_H, Surface, BARREL_LEN, siteFrame, type Frame, type Path } from './surface'
 
 const PKG_COLOUR = new THREE.Color(0.2, 0.42, 1.0)
 const PKG_HOT = new THREE.Color(2.6, 3.0, 4.0)
@@ -190,6 +190,12 @@ export function buildGround(ground: Surface, R: number, glow: THREE.Texture): Gr
   const tower = inst(box(0.5, 1.9, 0.5), dark, nS)
   const beacon = inst(box(0.16, 0.16, 0.16, 0, 1.9), amber, nS)
   const dockLamp = inst(box(0.1, 0.1, 0.4, 0, 0.9), warm, nS)
+  // The silo: a tower with a pad on top, a gantry mast beside it, and a
+  // carrier rocket standing on the pad whenever the economy has one ready.
+  const siloTower = inst(new THREE.CylinderGeometry(0.42 * S, 0.5 * S, 2.6 * S, 16).translate(0, 1.3 * S, 0), dark, nS)
+  const siloPad = inst(new THREE.CylinderGeometry(0.7 * S, 0.7 * S, 0.1 * S, 16).translate(0, 2.65 * S, 0), steel, nS)
+  const siloMast = inst(box(0.14, 3.4, 0.14, 0.55, 0, 0.55), steel, nS)
+  const siloLamp = inst(box(0.12, 0.12, 0.12, 0.55, 3.4, 0.55), amber, nS)
   // Per rail: base, yoke, rack platform.
   const base = inst(new THREE.CylinderGeometry(0.55 * S, 0.64 * S, 0.35 * S, 20).translate(0, 0.175 * S, 0), dark, nG)
   const yoke = inst(box(0.5, 0.7, 0.9, 0, 0.35), steel, nG)
@@ -211,6 +217,10 @@ export function buildGround(ground: Surface, R: number, glow: THREE.Texture): Gr
     place(tower, si, at(MINE_XY[0] + 1.0, MINE_XY[1] + 0.7))
     place(beacon, si, at(MINE_XY[0] + 1.0, MINE_XY[1] + 0.7))
     place(dockLamp, si, at(DOCK_XY[0] + 0.1, DOCK_XY[1]))
+    place(siloTower, si, site.silo)
+    place(siloPad, si, site.silo)
+    place(siloMast, si, site.silo)
+    place(siloLamp, si, site.silo)
     site.guns.forEach((g) => {
       place(base, g.id, g.frame)
       place(yoke, g.id, g.frame)
@@ -241,6 +251,19 @@ export function buildGround(ground: Surface, R: number, glow: THREE.Texture): Gr
     true,
   )
   for (let i = 0; i < nG; i++) coils.setColorAt(i, COIL_IDLE)
+  // The rocket on the pad and its launch flash.
+  const rocketGeo = merge([
+    new THREE.CylinderGeometry(0.17 * S, 0.19 * S, 1.1 * S, 12).translate(0, 0.55 * S, 0),
+    new THREE.ConeGeometry(0.17 * S, 0.45 * S, 12).translate(0, 1.325 * S, 0),
+    new THREE.CylinderGeometry(0.3 * S, 0.22 * S, 0.22 * S, 12).translate(0, 0.11 * S, 0),
+  ])
+  const padRocket = inst(rocketGeo, new THREE.MeshStandardMaterial({ color: '#e6e9ef', roughness: 0.45, metalness: 0.3 }), nS, true)
+  const siloFlash = inst(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: glow, color: '#ffd9a8', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
+    nS,
+    true,
+  )
 
   // Folded sails and the hauler fleet.
   const nP = ground.nPackages
@@ -305,6 +328,30 @@ export function buildGround(ground: Surface, R: number, glow: THREE.Texture): Gr
     coils.instanceMatrix.needsUpdate = true
     coils.instanceColor!.needsUpdate = true
     flash.instanceMatrix.needsUpdate = true
+
+    // Silos: the rocket stands on the pad while one is ready; a flash when it goes.
+    for (let si = 0; si < sites.length; si++) {
+      const site = sites[si]
+      const f = site.silo
+      if (site.siloLoaded) {
+        dummy.position.set(f.pos[0] + f.up[0] * SILO_H, f.pos[1] + f.up[1] * SILO_H, f.pos[2] + f.up[2] * SILO_H)
+        frameQuat(f, dummy.quaternion)
+        dummy.scale.setScalar(1)
+        dummy.updateMatrix()
+        padRocket.setMatrixAt(si, dummy.matrix)
+      } else padRocket.setMatrixAt(si, zero)
+      if (site.siloFlash > 0.01) {
+        const h = SILO_H + 0.6 * S
+        dummy.position.set(f.pos[0] + f.up[0] * h, f.pos[1] + f.up[1] * h, f.pos[2] + f.up[2] * h)
+        groupQ.setFromRotationMatrix(group.matrixWorld).invert()
+        dummy.quaternion.copy(groupQ).multiply(camera.quaternion)
+        dummy.scale.setScalar(site.siloFlash * 3.2 * S * gain)
+        dummy.updateMatrix()
+        siloFlash.setMatrixAt(si, dummy.matrix)
+      } else siloFlash.setMatrixAt(si, zero)
+    }
+    padRocket.instanceMatrix.needsUpdate = true
+    siloFlash.instanceMatrix.needsUpdate = true
 
     // Packages: a box standing on the ground wherever the simulation put it.
     const { pkPos, pkAlive, pkState } = ground

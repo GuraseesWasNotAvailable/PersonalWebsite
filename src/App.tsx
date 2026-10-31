@@ -11,6 +11,10 @@ import { buildGround } from './structures'
 import { makePlanet, ATMOSPHERE_FRAG, ATMOSPHERE_VERT, NOISE_GLSL, PLANET_FRAG, PLANET_VERT } from './planet'
 import { BELT_SPECS, buildSystem, positionOf, spinOf, type Body } from './system'
 import { AMBIENT_INTENSITY, AMBIENT_LIGHT, SUN_INTENSITY, SUN_LIGHT, asteroidBelt, lightUniforms, ringMaterial, trojans, worldMaterial, type Belt } from './worlds'
+import { Economy } from './economy'
+import { DysonSphere, type Target } from './sphere'
+import { Rockets } from './rockets'
+import { buildSphereView } from './sphereview'
 
 // ---------------------------------------------------------------------------
 // One scene: our solar system, with a Dyson swarm gathering around the Sun,
@@ -34,13 +38,18 @@ const LINKS = [
 ]
 
 const LANES: LaneSpec[] = [
-  { r: 190, tilt: [0.9, 0.3], n: 1800 },
-  { r: 245, tilt: [-0.5, 0.9], n: 2000 },
-  { r: 300, tilt: [0.25, -1.1], n: 2200 },
+  { r: 190, tilt: [0.9, 0.3], n: 2200 },
+  { r: 245, tilt: [-0.5, 0.9], n: 2400 },
+  { r: 300, tilt: [0.25, -1.1], n: 2600 },
 ]
 const SUN_R = 10
 const TIME_SCALE = 1.8 // simulation seconds per real second
 const WARMUP_S = 45 // seconds simulated before the first frame, so streams are already flowing
+const SHELL_RADII = [215, 272, 330] // between the sail lanes
+// The world has been running since this moment; a visitor arrives at the
+// stage of construction the clock says, and the build restarts each cycle.
+const EPOCH_S = Date.UTC(2026, 9, 31) / 1000
+const CYCLE_REAL_S = 24 * 3600
 
 // --- procedural textures ----------------------------------------------------
 
@@ -86,9 +95,9 @@ function sailTexture(size = 64) {
   c.width = c.height = size
   const g = c.getContext('2d')!
   const grd = g.createLinearGradient(0, 0, size, size)
-  grd.addColorStop(0, '#5f8dff')
-  grd.addColorStop(0.5, '#2f5ce8')
-  grd.addColorStop(1, '#8fb5ff')
+  grd.addColorStop(0, '#8fb0ff')
+  grd.addColorStop(0.5, '#4f7af2')
+  grd.addColorStop(1, '#bcd3ff')
   g.fillStyle = grd
   g.fillRect(2, 2, size - 4, size - 4)
   g.strokeStyle = 'rgba(210,228,255,0.95)'
@@ -148,20 +157,29 @@ void main(){
 
 // --- the camera's subject ----------------------------------------------------
 
-type Focus = { kind: 'star' } | { kind: 'ground'; body: THREE.Vector3 } | { kind: 'sail'; i: number } | { kind: 'bot'; b: number } | { kind: 'body'; b: number }
+type Focus =
+  | { kind: 'star' }
+  | { kind: 'ground'; body: THREE.Vector3 }
+  | { kind: 'sail'; i: number }
+  | { kind: 'bot'; b: number }
+  | { kind: 'body'; b: number }
+  | { kind: 'rocket'; r: number }
 
 const LIMITS = {
   star: { min: 40, max: 16000 },
   ground: { min: 0.7, max: 700 },
   sail: { min: 1.0, max: 300 },
   bot: { min: 0.5, max: 60 },
+  rocket: { min: 1.5, max: 300 },
 }
 
 export type Counts = {
   orbit: number
   transit: number
   ground: number
+  absorbing: number
   launched: number
+  absorbed: number
   sites: number
   guns: number
   inWindow: number
@@ -169,6 +187,20 @@ export type Counts = {
   racked: number
   onBelts: number
   built: number
+  rocketsFired: number
+  rocketsFlying: number
+  powerMW: number
+  completion: number
+  nodes: number
+  nodesDone: number
+  frames: number
+  framesDone: number
+  faces: number
+  facesDone: number
+  cells: number
+  supplyMW: number
+  demandMW: number
+  satisfaction: number
 }
 
 type Sim = { counts: () => Counts; focusText: () => string; land: () => void; dispose: () => void }
@@ -440,15 +472,123 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   positionOf(earth, 0, null, e0, v0)
   const swarm = new Swarm(LANES, e0, v0, PLANET_R, 7)
   const ground = new Surface(PLANET_R, swarm, earth.Q, 11)
-  for (let s = 0; s < WARMUP_S / 0.05; s++) {
-    swarm.step(0.05)
-    ground.step(0.05, swarm)
+
+  // The engine: an economy on Earth, the sphere the rockets build, the
+  // rockets in flight. Fast forwarded to where the clock says the build is.
+  const economy = new Economy(ground.sites.length, mulberry32(11))
+  const sphere = new DysonSphere(SHELL_RADII, 2, 5)
+  const rockets = new Rockets(400)
+  ground.attach(economy, sphere, rockets)
+  // ?t=<hours> looks at the build at a chosen point of the cycle instead.
+  const tParam = new URLSearchParams(location.search).get('t')
+  const elapsedReal = tParam !== null ? Math.max(0, Number(tParam)) * 3600 : (((Date.now() / 1000 - EPOCH_S) % CYCLE_REAL_S) + CYCLE_REAL_S) % CYCLE_REAL_S
+  economy.advance(elapsedReal * TIME_SCALE, 3.6, 30)
+  const r0 = economy.rates()
+  sphere.advance(elapsedReal * TIME_SCALE, r0.rocketsPerSec, r0.sailsPerSec)
+
+  // Absorption: a face whose frames are done pulls in the nearest orbiting
+  // sails, a few at a time; each sail's target follows the turning sphere.
+  const faceKey = (layer: number, face: number) => layer * 100000 + face
+  const tgt: Target = { layer: 0, kind: 0, index: 0 }
+  const cpos = new Float64Array(3)
+  const centroidOf = (key: number, out: Float32Array, o: number) => {
+    const layer = Math.floor(key / 100000)
+    const face = key % 100000
+    const L = sphere.layers[layer]
+    out[o] = out[o + 1] = out[o + 2] = 0
+    for (let k = 0; k < 3; k++) {
+      tgt.layer = layer
+      tgt.kind = 0
+      tgt.index = L.faces[face * 3 + k]
+      sphere.structurePos(tgt, swarm.time, cpos)
+      out[o] += cpos[0] / 3
+      out[o + 1] += cpos[1] / 3
+      out[o + 2] += cpos[2] / 3
+    }
   }
+  const onAbsorbed = (_i: number, key: number) => {
+    const layer = Math.floor(key / 100000)
+    const face = key % 100000
+    sphere.absorb(layer, face)
+    sphere.setInbound(layer, face, -1)
+  }
+  // Up to sixteen faces draw sails at once, ten inbound each, which absorbs
+  // about half of what the rails launch, so the swarm stays dense while the
+  // shells fill.
+  const READY_FACES = 16
+  const INBOUND_PER_FACE = 10
+  const ready: Array<{ layer: number; face: number; cx: number; cy: number; cz: number }> = []
+  for (let k = 0; k < READY_FACES; k++) ready.push({ layer: 0, face: 0, cx: 0, cy: 0, cz: 0 })
+  let absorbClock = 0
+  const absorbTick = (dt: number) => {
+    absorbClock -= dt
+    if (absorbClock > 0) return
+    absorbClock = 0.5
+    const n = sphere.readyFaces(swarm.time, READY_FACES, ready)
+    for (let k = 0; k < n; k++) {
+      const f = ready[k]
+      const want = INBOUND_PER_FACE - sphere.layers[f.layer].inbound[f.face]
+      if (want <= 0) continue
+      const sent = swarm.pickForFace(faceKey(f.layer, f.face), f.cx, f.cy, f.cz, want)
+      if (sent > 0) sphere.setInbound(f.layer, f.face, sent)
+    }
+  }
+  const stepWorld = (dt: number) => {
+    swarm.step(dt / 2, centroidOf, onAbsorbed)
+    swarm.step(dt / 2, centroidOf, onAbsorbed)
+    ground.step(dt, swarm)
+    economy.tick(dt, ground.sunElev, sphere.powerMW())
+    rockets.step(dt, sphere, swarm.time)
+    absorbTick(dt)
+  }
+  for (let s = 0; s < WARMUP_S / 0.1; s++) stepWorld(0.1)
   const built = buildGround(ground, PLANET_R, blueGlow)
   spin.add(built.group)
+  const sphereView = buildSphereView(sphere)
+  scene.add(sphereView.group)
 
-  const sailGeo = new THREE.PlaneGeometry(1.5, 1.5)
-  const sailMat = new THREE.MeshBasicMaterial({ map: sailTexture(), color: '#8db3ff', side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
+  // Rockets in flight: a small hull pointed along its velocity and a flame behind.
+  const rocketGeo = (() => {
+    const g = new THREE.CylinderGeometry(0.35, 0.45, 2.6, 10)
+    g.translate(0, 0.3, 0)
+    const nose = new THREE.ConeGeometry(0.35, 1.0, 10)
+    nose.translate(0, 2.1, 0)
+    const parts = [g, nose]
+    const pos: number[] = []
+    const nrm: number[] = []
+    const idx: number[] = []
+    let base = 0
+    for (const p of parts) {
+      const a = p.getAttribute('position')
+      const n = p.getAttribute('normal')
+      for (let i = 0; i < a.count; i++) {
+        pos.push(a.getX(i), a.getY(i), a.getZ(i))
+        nrm.push(n.getX(i), n.getY(i), n.getZ(i))
+      }
+      const ix = p.getIndex()!
+      for (let i = 0; i < ix.count; i++) idx.push(ix.getX(i) + base)
+      base += a.count
+    }
+    const out = new THREE.BufferGeometry()
+    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
+    out.setIndex(idx)
+    return out
+  })()
+  const rocketMesh = new THREE.InstancedMesh(rocketGeo, new THREE.MeshStandardMaterial({ color: '#e8ebf2', roughness: 0.4, metalness: 0.35 }), rockets.N)
+  rocketMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  rocketMesh.frustumCulled = false
+  const flameMesh = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(2.2, 2.2),
+    new THREE.MeshBasicMaterial({ map: glow, color: '#ffc27a', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
+    rockets.N,
+  )
+  flameMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  flameMesh.frustumCulled = false
+  scene.add(rocketMesh, flameMesh)
+
+  const sailGeo = new THREE.PlaneGeometry(2.2, 2.2)
+  const sailMat = new THREE.MeshBasicMaterial({ map: sailTexture(), color: '#b4ccff', side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
   const sails = new THREE.InstancedMesh(sailGeo, sailMat, swarm.N)
   sails.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   scene.add(sails)
@@ -515,7 +655,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     const side = new THREE.Vector3().crossVectors(away, new THREE.Vector3(0, 1, 0)).normalize()
     const dir = away.multiplyScalar(Math.cos(0.36)).addScaledVector(side, Math.sin(0.36))
     dir.y += 0.26
-    camera.position.copy(dir.normalize().multiplyScalar(424))
+    camera.position.copy(dir.normalize().multiplyScalar(900))
     controls.target.set(0, 0, 0)
     controls.update()
   }
@@ -529,6 +669,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     if (f.kind === 'star') return out.set(0, 0, 0)
     if (f.kind === 'ground') return out.copy(f.body).applyMatrix4(spin.matrixWorld)
     if (f.kind === 'body') return out.copy(nodes[f.b].pos)
+    if (f.kind === 'rocket') return out.set(rockets.pos[f.r * 3], rockets.pos[f.r * 3 + 1], rockets.pos[f.r * 3 + 2])
     if (f.kind === 'bot') {
       const o = f.b * 3
       return out.set(ground.botPos[o], ground.botPos[o + 1], ground.botPos[o + 2]).applyMatrix4(spin.matrixWorld)
@@ -584,11 +725,11 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   }
   const pullBack = () => {
     if (focus.kind === 'star') return
-    if (focus.kind === 'ground' || focus.kind === 'body') setFocus({ kind: 'star' }, 420, 2)
+    if (focus.kind === 'ground' || focus.kind === 'body' || focus.kind === 'rocket') setFocus({ kind: 'star' }, 900, 2)
     else {
       const onGround = focus.kind === 'bot' || swarm.state[focus.i] === RESERVED
       if (onGround) setFocus({ kind: 'ground', body: spin.worldToLocal(anchorOf(focus, tmp).clone()) }, 10)
-      else setFocus({ kind: 'star' }, 420, 2)
+      else setFocus({ kind: 'star' }, 900, 2)
     }
   }
 
@@ -643,6 +784,11 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       tmp.set(ground.botPos[b * 3], ground.botPos[b * 3 + 1], ground.botPos[b * 3 + 2]).applyMatrix4(spin.matrixWorld)
       consider({ kind: 'bot', b }, 2.2)
     }
+    for (let r = 0; r < rockets.N; r++) {
+      if (!rockets.alive[r]) continue
+      tmp.set(rockets.pos[r * 3], rockets.pos[r * 3 + 1], rockets.pos[r * 3 + 2])
+      consider({ kind: 'rocket', r }, 12)
+    }
     if (best) {
       setFocus(best, bestDist)
       return
@@ -652,7 +798,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       const here = camera.position.distanceTo(controls.target)
       const dist = focus.kind === 'ground' ? Math.max(1.2, here * 0.4) : 48
       setFocus({ kind: 'ground', body: spin.worldToLocal(solid.point.clone()) }, dist, focus.kind === 'ground' ? 1.2 : 2.2)
-    } else if (solid.object === sunMesh) setFocus({ kind: 'star' }, 420, 2)
+    } else if (solid.object === sunMesh) setFocus({ kind: 'star' }, 900, 2)
     else {
       const bi = nodeOfMesh.get(solid.object)
       if (bi !== undefined) flyTo(bi)
@@ -722,6 +868,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   const dummy = new THREE.Object3D()
   const zero = new THREE.Matrix4().makeScale(0, 0, 0)
   const offset = new THREE.Vector3()
+  const yAxis = new THREE.Vector3(0, 1, 0)
 
   // Tags ride with their worlds while those are small on screen. Moons only
   // show once you are near their planet.
@@ -772,11 +919,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     const wall = Math.min(clock.getDelta(), 0.25)
     const real = Math.min(wall, 1 / 20)
     const simDt = reduceMotion ? 0 : real * TIME_SCALE
-    if (simDt > 0) {
-      swarm.step(simDt / 2)
-      swarm.step(simDt / 2)
-      ground.step(simDt, swarm)
-    }
+    if (simDt > 0) stepWorld(simDt)
     const t = swarm.time
     sunUniforms.uTime.value = t
 
@@ -798,9 +941,36 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
     }
     sails.instanceMatrix.needsUpdate = true
     built.update(camera)
+    sphereView.update(t)
 
-    // A followed sail that has been recycled is gone; go back to the Sun.
-    if (focus.kind === 'sail' && swarm.state[focus.i] === QUEUED) setFocus({ kind: 'star' }, 420, 2)
+    // Rockets: hull along the velocity, flame at the tail facing the camera.
+    for (let r = 0; r < rockets.N; r++) {
+      if (!rockets.alive[r]) {
+        rocketMesh.setMatrixAt(r, zero)
+        flameMesh.setMatrixAt(r, zero)
+        continue
+      }
+      const o = r * 3
+      dummy.position.set(rockets.pos[o], rockets.pos[o + 1], rockets.pos[o + 2])
+      tmp.set(rockets.vel[o], rockets.vel[o + 1], rockets.vel[o + 2])
+      if (tmp.lengthSq() < 1e-8) tmp.copy(yAxis)
+      else tmp.normalize()
+      dummy.quaternion.setFromUnitVectors(yAxis, tmp)
+      dummy.scale.setScalar(1)
+      dummy.updateMatrix()
+      rocketMesh.setMatrixAt(r, dummy.matrix)
+      dummy.position.addScaledVector(tmp, -1.2)
+      dummy.quaternion.copy(camera.quaternion)
+      dummy.updateMatrix()
+      flameMesh.setMatrixAt(r, dummy.matrix)
+    }
+    rocketMesh.instanceMatrix.needsUpdate = true
+    flameMesh.instanceMatrix.needsUpdate = true
+
+    // A followed sail that has been recycled or absorbed is gone, and so is
+    // a rocket that has arrived; go back to the Sun.
+    if (focus.kind === 'sail' && swarm.state[focus.i] === QUEUED) setFocus({ kind: 'star' }, 900, 2)
+    if (focus.kind === 'rocket' && !rockets.alive[focus.r]) setFocus({ kind: 'star' }, 900, 2)
 
     // Keep the camera riding with its subject: the subject moved, so the
     // target and the camera move by the same amount. A tween blends the
@@ -867,6 +1037,14 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   const focusText = () => {
     if (focus.kind === 'star' || focus.kind === 'ground') return ''
     if (focus.kind === 'body') return nodes[focus.b].body.facts
+    if (focus.kind === 'rocket') {
+      const key = rockets.target[focus.r]
+      if (key < 0) return 'rocket: arrived'
+      const layer = Math.floor(key / 1000000)
+      const kind = Math.floor((key % 1000000) / 100000)
+      const index = key % 100000
+      return `carrier rocket ${focus.r + 1}: bound for ${kind === 0 ? 'node' : 'frame'} ${index + 1} of shell ${layer + 1}`
+    }
     if (focus.kind === 'bot') {
       const site = ground.botSite[focus.b] + 1
       const st = ground.botState[focus.b]
@@ -881,6 +1059,7 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
       return `sail ${i + 1}: ${p >= 0 ? ground.describePackage(p) : 'being built'}`
     }
     if (st === TRANSIT) return `sail ${i + 1}: in flight ${Math.round(swarm.age[i])} s, steering for lane ${lane}`
+    if (swarm.face[i] >= 0) return `sail ${i + 1}: steering into shell ${Math.floor(swarm.face[i] / 100000) + 1}, face ${(swarm.face[i] % 100000) + 1}`
     return `sail ${i + 1}: in orbit, lane ${lane}`
   }
 
@@ -919,7 +1098,27 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   }
 
   return {
-    counts: () => ({ ...swarm.counts(), ...ground.counts() }),
+    counts: () => {
+      const sc = sphere.counts()
+      const er = economy.rates()
+      return {
+        ...swarm.counts(),
+        ...ground.counts(),
+        rocketsFlying: rockets.count(),
+        powerMW: sphere.powerMW(),
+        completion: sphere.completion(),
+        nodes: sc.nodes,
+        nodesDone: sc.nodesDone,
+        frames: sc.frames,
+        framesDone: sc.framesDone,
+        faces: sc.faces,
+        facesDone: sc.facesDone,
+        cells: sc.cells,
+        supplyMW: er.supplyMW,
+        demandMW: er.demandMW,
+        satisfaction: er.demandMW > 0 ? Math.min(1, er.supplyMW / er.demandMW) : 1,
+      }
+    },
     focusText,
     land,
     dispose() {
@@ -944,8 +1143,37 @@ function startScene(canvas: HTMLCanvasElement, tags: HTMLElement, reduceMotion: 
   }
 }
 
-const EMPTY: Counts = { orbit: 0, transit: 0, ground: 0, launched: 0, sites: 0, guns: 0, inWindow: 0, firing: 0, racked: 0, onBelts: 0, built: 0 }
+const EMPTY: Counts = {
+  orbit: 0,
+  transit: 0,
+  ground: 0,
+  absorbing: 0,
+  launched: 0,
+  absorbed: 0,
+  sites: 0,
+  guns: 0,
+  inWindow: 0,
+  firing: 0,
+  racked: 0,
+  onBelts: 0,
+  built: 0,
+  rocketsFired: 0,
+  rocketsFlying: 0,
+  powerMW: 0,
+  completion: 0,
+  nodes: 0,
+  nodesDone: 0,
+  frames: 0,
+  framesDone: 0,
+  faces: 0,
+  facesDone: 0,
+  cells: 0,
+  supplyMW: 0,
+  demandMW: 0,
+  satisfaction: 1,
+}
 const n = (x: number) => x.toLocaleString('en-US')
+const gw = (mw: number) => (mw >= 1000 ? `${(mw / 1000).toFixed(2)} GW` : `${mw.toFixed(0)} MW`)
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -1010,16 +1238,19 @@ export default function App() {
           </div>
           <div className="hud" aria-live="polite">
             <div>
-              Dyson swarm <b>{n(counts.orbit)}</b> in orbit, <b>{n(counts.transit)}</b> in transit
+              Dyson sphere <b>{gw(counts.powerMW)}</b>, <b>{(counts.completion * 100).toFixed(1)}%</b> built
             </div>
             <div>
-              <b>{n(counts.sites)}</b> factories on Earth, <b>{n(counts.ground)}</b> sails on the ground
+              <b>{n(counts.nodesDone)}</b> of {n(counts.nodes)} nodes, <b>{n(counts.framesDone)}</b> of {n(counts.frames)} frames, <b>{n(counts.cells)}</b> cells
             </div>
             <div>
-              <b>{n(counts.inWindow)}</b> of {n(counts.guns)} rails in their window, <b>{n(counts.firing)}</b> firing
+              swarm <b>{n(counts.orbit)}</b> in orbit, <b>{n(counts.transit)}</b> in transit, <b>{n(counts.absorbing)}</b> being absorbed
             </div>
             <div>
-              <b>{n(counts.launched)}</b> launched
+              <b>{n(counts.rocketsFlying)}</b> rockets in flight, <b>{n(counts.inWindow)}</b> of {n(counts.guns)} rails in their window
+            </div>
+            <div>
+              factories at <b>{Math.round(counts.satisfaction * 100)}%</b> power, {counts.supplyMW.toFixed(0)} of {counts.demandMW.toFixed(0)} MW
             </div>
             {track && <div className="track">{track}</div>}
           </div>

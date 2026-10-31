@@ -17,6 +17,9 @@
 // on the curve.
 import { Swarm, mulberry32 } from './swarm'
 import { heightAt } from './noise'
+import { ORES, STOCK_CAP, type Economy } from './economy'
+import type { DysonSphere } from './sphere'
+import type { Rockets } from './rockets'
 
 export type V3 = [number, number, number]
 
@@ -72,6 +75,10 @@ export const RACK_PITCH = 0.36
 const BELT_END_X = 4.3
 export const MINE_XY: [number, number] = [-6.4, -3.2]
 export const DOCK_XY: [number, number] = [-3.55, 0.5]
+export const SILO_XY: [number, number] = [-2.6, 4.4]
+export const SILO_H = 2.6 * S // the pad the rocket stands on, above the ground
+const SILO_SPEED = 18
+const SILO_COOLDOWN = 6
 const HAUL_WAY: [number, number][] = [MINE_XY, [-5.1, -1.1], DOCK_XY]
 const LANE_OFF = 0.3
 export const PAD_R = 7.6
@@ -138,6 +145,11 @@ export type Site = {
   built: number
   stalled: boolean
   stallReason: string
+  silo: Frame
+  siloCooldown: number
+  siloLoaded: boolean // a rocket stands on the pad
+  siloFlash: number
+  rocketsFired: number
 }
 
 const norm3 = (v: V3): V3 => {
@@ -242,6 +254,15 @@ function offsetWay(way: [number, number][], off: number): [number, number][] {
     const l = Math.hypot(dx, dy) || 1
     return [x - (dy / l) * off, y + (dx / l) * off]
   })
+}
+
+// Room left in a site's raw ore stock, across the kinds, before the economy
+// starts clamping deliveries.
+function oreRoom(econ: Economy, site: number) {
+  const e = econ.sites[site]
+  let total = 0
+  for (const k of ORES) total += e.ore[k]
+  return STOCK_CAP * ORES.length - total
 }
 
 export function pathAt(p: Path, s: number, out: Float32Array | number[], o = 0, tan?: Float32Array | number[], to = 0) {
@@ -369,7 +390,15 @@ export class Surface {
   private readonly tmpW = new Float64Array(3)
   private readonly tmpV = new Float64Array(3)
   private readonly tmpM = new Float64Array(3)
+  private readonly tmpS = new Float64Array(3)
   built = 0
+  // The engine behind the ground, attached by the page: the economy that
+  // turns hauled ore into sails and rockets, the sphere the rockets build,
+  // and the rockets in flight.
+  economy: Economy | null = null
+  sphere: DysonSphere | null = null
+  rockets: Rockets | null = null
+  readonly sunElev: Float32Array
 
   constructor(R: number, swarm: Swarm, Q: number[] = [1, 0, 0, 0, 1, 0, 0, 0, 1], seed = 11) {
     this.R = R
@@ -432,6 +461,11 @@ export class Surface {
         hall: siteFrame(plan, 0, 0, 0, R),
         mine: siteFrame(plan, MINE_XY[0], MINE_XY[1], 0, R),
         dock: siteFrame(plan, DOCK_XY[0], DOCK_XY[1], 0, R),
+        silo: siteFrame(plan, SILO_XY[0], SILO_XY[1], 0, R),
+        siloCooldown: this.rand() * SILO_COOLDOWN,
+        siloLoaded: false,
+        siloFlash: 0,
+        rocketsFired: 0,
         guns,
         haulOut: makePath(plan, offsetWay(HAUL_WAY, -LANE_OFF), 0.08, R),
         haulBack: makePath(plan, offsetWay(HAUL_WAY.slice().reverse(), -LANE_OFF), 0.08, R),
@@ -446,6 +480,7 @@ export class Surface {
       this.sites.push(site)
     })
 
+    this.sunElev = new Float32Array(this.sites.length)
     this.nBots = this.sites.length * HAULERS_PER_SITE
     this.botPos = new Float32Array(this.nBots * 3)
     this.botTan = new Float32Array(this.nBots * 3)
@@ -478,6 +513,12 @@ export class Surface {
     return MAX_PKG
   }
 
+  attach(economy: Economy, sphere: DysonSphere, rockets: Rockets) {
+    this.economy = economy
+    this.sphere = sphere
+    this.rockets = rockets
+  }
+
   private allocPk(): number {
     const i = this.freePk.pop()
     return i === undefined ? -1 : i
@@ -507,13 +548,52 @@ export class Surface {
     const omega = SPIN_RATE
 
     for (const site of this.sites) {
+      // The Sun's height over the site, for its solar panels.
+      const w = bodyToWorld(site.center, theta, this.Q, this.tmpS) as Float64Array
+      this.sunElev[site.index] = Math.max(0, -(w[0] * pp[0] + w[1] * pp[1] + w[2] * pp[2]) / pr)
       this.stepHaulers(site, dt)
       this.stepFactory(site, dt, swarm)
       for (const g of site.guns) {
         this.stepBelt(g, dt)
         this.stepGun(g, dt, aimV, swarm, theta, omega)
       }
+      this.stepSilo(site, dt, swarm, theta, omega)
     }
+  }
+
+  // The silo: when the economy has a finished rocket and the sphere has
+  // somewhere to put it, fire straight up with the planet's motion added.
+  private stepSilo(site: Site, dt: number, swarm: Swarm, theta: number, omega: number) {
+    const econ = this.economy
+    site.siloCooldown -= dt
+    site.siloFlash = Math.max(0, site.siloFlash - dt * 3)
+    if (!econ || !this.sphere || !this.rockets) {
+      site.siloLoaded = false
+      return
+    }
+    site.siloLoaded = econ.sites[site.index].rockets >= 1
+    if (site.siloCooldown > 0 || !site.siloLoaded) return
+    const target = this.sphere.nextTarget()
+    if (!target) return
+    const f = site.silo
+    const top = this.tmpM
+    for (let k = 0; k < 3; k++) top[k] = f.pos[k] + f.up[k] * SILO_H
+    const tW = bodyToWorld(top, theta, this.Q, this.tmpV) as Float64Array
+    const uW = bodyToWorld(f.up, theta, this.Q, this.tmpS) as Float64Array
+    const wx = this.Q[1] * omega
+    const wy = this.Q[4] * omega
+    const wz = this.Q[7] * omega
+    const pos = [swarm.planetPos[0] + tW[0], swarm.planetPos[1] + tW[1], swarm.planetPos[2] + tW[2]]
+    const vel = [
+      swarm.planetVel[0] + (wy * tW[2] - wz * tW[1]) + uW[0] * SILO_SPEED,
+      swarm.planetVel[1] + (wz * tW[0] - wx * tW[2]) + uW[1] * SILO_SPEED,
+      swarm.planetVel[2] + (wx * tW[1] - wy * tW[0]) + uW[2] * SILO_SPEED,
+    ]
+    if (!this.rockets.launch(pos, vel, target)) return
+    econ.takeRocket(site.index)
+    site.siloCooldown = SILO_COOLDOWN
+    site.siloFlash = 1
+    site.rocketsFired++
   }
 
   private stepHaulers(site: Site, dt: number) {
@@ -565,7 +645,9 @@ export class Surface {
         this.botPos[t + 2] += sz * this.botLane[b]
       }
     }
-    // Unloading at the dock only proceeds while the factory has room.
+    // Unloading at the dock only proceeds while the factory has room. With
+    // the economy attached, the ore goes to its smelters' stock instead.
+    const econ = this.economy
     run(
       site.outBots,
       site.haulOut,
@@ -573,8 +655,8 @@ export class Surface {
       BOT_UNLOADING,
       DOCK_UNLOAD_S,
       site.backBots,
-      () => site.ore + HAUL_LOAD <= ORE_CAP,
-      () => (site.ore += HAUL_LOAD),
+      () => (econ ? oreRoom(econ, site.index) >= HAUL_LOAD : site.ore + HAUL_LOAD <= ORE_CAP),
+      () => (econ ? econ.deliverOre(site.index, HAUL_LOAD) : (site.ore += HAUL_LOAD)),
     )
     run(site.backBots, site.haulBack, BOT_TO_PIT, BOT_LOADING, MINE_LOAD_S, site.outBots, () => true, () => undefined)
   }
@@ -582,9 +664,10 @@ export class Surface {
   private stepFactory(site: Site, dt: number, swarm: Swarm) {
     site.build -= dt
     if (site.build > 0) return
-    if (site.ore < 1) {
+    const econ = this.economy
+    if (econ ? econ.sites[site.index].sails < 1 : site.ore < 1) {
       site.stalled = true
-      site.stallReason = 'waiting for ore'
+      site.stallReason = econ ? 'waiting for sails from the assemblers' : 'waiting for ore'
       return
     }
     // Send the next sail to the emptiest rack, preferring rails in their window.
@@ -620,7 +703,8 @@ export class Surface {
       return
     }
     site.stalled = false
-    site.ore -= 1
+    if (econ) econ.takeSail(site.index)
+    else site.ore -= 1
     site.build = BUILD_S
     site.built++
     this.built++
@@ -788,7 +872,9 @@ export class Surface {
       onBelts += g.onBelt.length
       fired += g.fired
     }
-    return { sites: this.sites.length, guns: this.guns.length, inWindow, firing, racked, onBelts, built: this.built, fired }
+    let rocketsFired = 0
+    for (const s of this.sites) rocketsFired += s.rocketsFired
+    return { sites: this.sites.length, guns: this.guns.length, inWindow, firing, racked, onBelts, built: this.built, fired, rocketsFired }
   }
 
   // A sentence for the HUD about where a sail is on the ground.
