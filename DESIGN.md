@@ -218,10 +218,12 @@ export function buildSphereView(sphere: DysonSphere): { group: THREE.Group; upda
   site has one rocket plant, giving 0.25 rockets a second in all. Finished
   goods cap at 3000 sails and 240 rockets per site. `advance` ticks the real
   chain for the first 600 s then extends in closed form, about 1 ms for a day.
-- Sphere costs. 40 rockets a node, 60 a frame, 900 sails a shell face. The
-  structure of all three layers takes about 27,000 rockets, so at 0.25 a
-  second it completes around 30 hours of simulation, 17 hours of real time;
-  the shells follow a few hours behind. The cycle is 24 real hours from
+- Sphere costs. One shell layer at radius 330, just outside the outermost
+  lane: 120 rockets a node, 180 a frame, 2400 sails a shell face, so the
+  single layer takes what three used to, about 27,000 rockets, completing
+  around 30 hours of simulation, 17 hours of real time; the shell follows a
+  few hours behind. Shell panes are nearly clear so the Sun and the swarm
+  stay visible inside. The cycle is 24 real hours from
   2026-10-31 00:00 UTC, so the finished sphere stands for the last quarter.
 - Absorption. Up to sixteen ready faces draw sails at once, ten inbound each,
   about half the launch rate, so the swarm stays dense while shells fill.

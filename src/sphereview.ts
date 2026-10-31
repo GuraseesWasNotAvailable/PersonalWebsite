@@ -142,7 +142,7 @@ void main(){
   vec3 pane = mix(uSkin, uLit * tone, lit);
   vec3 rim = mix(uSkin * 3.0, uLine, lit);
   vec3 col = mix(pane, rim, line);
-  float alpha = mix(mix(uSkinAlpha, 0.22, lit), mix(0.3, 0.7, lit), line);
+  float alpha = mix(mix(uSkinAlpha, 0.11, lit), mix(0.14, 0.42, lit), line);
   gl_FragColor = vec4(col, alpha);
 }`
 
@@ -225,7 +225,7 @@ export function buildSphereView(sphere: DysonSphere): { group: THREE.Group; upda
       uSkin: { value: new THREE.Color(0.02, 0.04, 0.09) },
       uLit: { value: new THREE.Color(0.1, 0.2, 0.42) },
       uLine: { value: new THREE.Color(0.4, 0.62, 0.95) },
-      uSkinAlpha: { value: 0.18 },
+      uSkinAlpha: { value: 0.07 },
     },
     vertexShader: SHELL_VERT,
     fragmentShader: SHELL_FRAG,

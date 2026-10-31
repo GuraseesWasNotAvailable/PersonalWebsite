@@ -26,7 +26,7 @@ const tilt = 0.4
 const Q = [Math.cos(tilt), -Math.sin(tilt), 0, Math.sin(tilt), Math.cos(tilt), 0, 0, 0, 1]
 const ground = new Surface(R, sw, Q, 11)
 const economy = new Economy(ground.sites.length, mulberry32(11))
-const sphere = new DysonSphere([215, 272, 330], 2, 5)
+const sphere = new DysonSphere([330], 2, 5)
 const rockets = new Rockets(400)
 ground.attach(economy, sphere, rockets)
 

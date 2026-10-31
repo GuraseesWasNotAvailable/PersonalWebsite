@@ -195,9 +195,11 @@ export function buildGeodesic(frequency: number): Geodesic {
 
 export class DysonSphere {
   readonly layers: SphereLayer[]
-  readonly NODE_COST = 40 // rockets per node
-  readonly EDGE_COST = 60 // rockets per frame
-  readonly FACE_CELLS = 900 // sails per shell face
+  // One layer now carries the whole build, so each piece costs what three
+  // layers' worth used to and the sphere still takes most of a day.
+  readonly NODE_COST = 120 // rockets per node
+  readonly EDGE_COST = 180 // rockets per frame
+  readonly FACE_CELLS = 2400 // sails per shell face
   spin: number // radians per second about the axis
   axis: [number, number, number]
   // Rockets that arrived at a node or frame already finished. A handful is

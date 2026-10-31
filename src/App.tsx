@@ -45,7 +45,7 @@ const LANES: LaneSpec[] = [
 const SUN_R = 10
 const TIME_SCALE = 1.8 // simulation seconds per real second
 const WARMUP_S = 45 // seconds simulated before the first frame, so streams are already flowing
-const SHELL_RADII = [215, 272, 330] // between the sail lanes
+const SHELL_RADII = [330] // one shell, just outside the outermost sail lane
 // The world has been running since this moment; a visitor arrives at the
 // stage of construction the clock says, and the build restarts each cycle.
 const EPOCH_S = Date.UTC(2026, 9, 31) / 1000
